@@ -18,22 +18,19 @@
 package org.apache.beam.sdk.coders;
 
 import static com.google.common.base.Preconditions.checkArgument;
-
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.junit.Assert.assertThat;
 
+import java.io.Serializable;
+import java.util.List;
 import org.apache.beam.sdk.values.TypeDescriptor;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
-import java.util.List;
 
 /**
  * Tests of Coder defaults.
@@ -82,7 +79,7 @@ public class DefaultCoderTest {
     }
 
     protected CustomSerializableCoder() {
-      super(CustomRecord.class);
+      super(CustomRecord.class, TypeDescriptor.of(CustomRecord.class));
     }
   }
 
@@ -96,7 +93,7 @@ public class DefaultCoderTest {
     }
 
     protected OldCustomSerializableCoder() {
-      super(OldCustomRecord.class);
+      super(OldCustomRecord.class, TypeDescriptor.of(OldCustomRecord.class));
     }
   }
 

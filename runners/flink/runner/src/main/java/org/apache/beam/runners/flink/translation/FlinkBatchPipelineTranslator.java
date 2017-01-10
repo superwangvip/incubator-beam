@@ -17,20 +17,19 @@
  */
 package org.apache.beam.runners.flink.translation;
 
+import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.runners.TransformTreeNode;
-import org.apache.beam.sdk.transforms.AppliedPTransform;
+import org.apache.beam.sdk.runners.TransformHierarchy;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.join.CoGroupByKey;
-import org.apache.beam.sdk.values.PValue;
-
+import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.api.java.io.DiscardingOutputFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * FlinkBatchPipelineTranslator knows how to translate Pipeline objects into Flink Jobs.
- * This is based on {@link org.apache.beam.runners.dataflow.DataflowPipelineTranslator}
+ * {@link Pipeline.PipelineVisitor} for executing a {@link Pipeline} as a
+ * Flink batch job.
  */
 public class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
 
@@ -47,13 +46,25 @@ public class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
     this.batchContext = new FlinkBatchTranslationContext(env, options);
   }
 
+  @Override
+  @SuppressWarnings("rawtypes, unchecked")
+  public void translate(Pipeline pipeline) {
+    super.translate(pipeline);
+
+    // terminate dangling DataSets
+    for (DataSet<?> dataSet: batchContext.getDanglingDataSets().values()) {
+      dataSet.output(new DiscardingOutputFormat());
+    }
+  }
+
   // --------------------------------------------------------------------------------------------
   //  Pipeline Visitor Methods
   // --------------------------------------------------------------------------------------------
 
   @Override
-  public CompositeBehavior enterCompositeTransform(TransformTreeNode node) {
+  public CompositeBehavior enterCompositeTransform(TransformHierarchy.Node node) {
     LOG.info(genSpaces(this.depth) + "enterCompositeTransform- " + formatNodeName(node));
+    this.depth++;
 
     BatchTransformTranslator<?> translator = getTranslator(node);
 
@@ -62,33 +73,37 @@ public class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
       LOG.info(genSpaces(this.depth) + "translated-" + formatNodeName(node));
       return CompositeBehavior.DO_NOT_ENTER_TRANSFORM;
     } else {
-      this.depth++;
       return CompositeBehavior.ENTER_TRANSFORM;
     }
   }
 
   @Override
-  public void leaveCompositeTransform(TransformTreeNode node) {
+  public void leaveCompositeTransform(TransformHierarchy.Node node) {
     this.depth--;
     LOG.info(genSpaces(this.depth) + "leaveCompositeTransform- " + formatNodeName(node));
   }
 
   @Override
-  public void visitPrimitiveTransform(TransformTreeNode node) {
+  public void visitPrimitiveTransform(TransformHierarchy.Node node) {
     LOG.info(genSpaces(this.depth) + "visitPrimitiveTransform- " + formatNodeName(node));
 
     // get the transformation corresponding to the node we are
     // currently visiting and translate it into its Flink alternative.
     PTransform<?, ?> transform = node.getTransform();
-    BatchTransformTranslator<?> translator = FlinkBatchTransformTranslators.getTranslator(transform);
+    BatchTransformTranslator<?> translator =
+        FlinkBatchTransformTranslators.getTranslator(transform);
     if (translator == null) {
       LOG.info(node.getTransform().getClass().toString());
-      throw new UnsupportedOperationException("The transform " + transform + " is currently not supported.");
+      throw new UnsupportedOperationException("The transform " + transform
+          + " is currently not supported.");
     }
     applyBatchTransform(transform, node, translator);
   }
 
-  private <T extends PTransform<?, ?>> void applyBatchTransform(PTransform<?, ?> transform, TransformTreeNode node, BatchTransformTranslator<?> translator) {
+  private <T extends PTransform<?, ?>> void applyBatchTransform(
+      PTransform<?, ?> transform,
+      TransformHierarchy.Node node,
+      BatchTransformTranslator<?> translator) {
 
     @SuppressWarnings("unchecked")
     T typedTransform = (T) transform;
@@ -97,22 +112,21 @@ public class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
     BatchTransformTranslator<T> typedTranslator = (BatchTransformTranslator<T>) translator;
 
     // create the applied PTransform on the batchContext
-    batchContext.setCurrentTransform(AppliedPTransform.of(
-        node.getFullName(), node.getInput(), node.getOutput(), (PTransform) transform));
+    batchContext.setCurrentTransform(node.toAppliedPTransform());
     typedTranslator.translateNode(typedTransform, batchContext);
   }
 
   /**
    * A translator of a {@link PTransform}.
    */
-  public interface BatchTransformTranslator<Type extends PTransform> {
-    void translateNode(Type transform, FlinkBatchTranslationContext context);
+  public interface BatchTransformTranslator<TransformT extends PTransform> {
+    void translateNode(TransformT transform, FlinkBatchTranslationContext context);
   }
 
   /**
    * Returns a translator for the given node, if it is possible, otherwise null.
    */
-  private static BatchTransformTranslator<?> getTranslator(TransformTreeNode node) {
+  private static BatchTransformTranslator<?> getTranslator(TransformHierarchy.Node node) {
     PTransform<?, ?> transform = node.getTransform();
 
     // Root of the graph is null
@@ -120,30 +134,10 @@ public class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
       return null;
     }
 
-    BatchTransformTranslator<?> translator = FlinkBatchTransformTranslators.getTranslator(transform);
-
-    // No translator known
-    if (translator == null) {
-      return null;
-    }
-
-    // We actually only specialize CoGroupByKey when exactly 2 inputs
-    if (transform instanceof CoGroupByKey && node.getInput().expand().size() != 2) {
-      return null;
-    }
-
-    return translator;
+    return FlinkBatchTransformTranslators.getTranslator(transform);
   }
 
-  private static String genSpaces(int n) {
-    String s = "";
-    for (int i = 0; i < n; i++) {
-      s += "|   ";
-    }
-    return s;
-  }
-
-  private static String formatNodeName(TransformTreeNode node) {
+  private static String formatNodeName(TransformHierarchy.Node node) {
     return node.toString().split("@")[1] + node.getTransform();
   }
 }

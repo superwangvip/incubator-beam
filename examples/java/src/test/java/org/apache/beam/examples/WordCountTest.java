@@ -17,28 +17,27 @@
  */
 package org.apache.beam.examples;
 
+import java.util.Arrays;
+import java.util.List;
 import org.apache.beam.examples.WordCount.CountWords;
 import org.apache.beam.examples.WordCount.ExtractWordsFn;
 import org.apache.beam.examples.WordCount.FormatAsTextFn;
-import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.DoFnTester;
 import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.values.PCollection;
-
 import org.hamcrest.CoreMatchers;
 import org.junit.Assert;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Tests of WordCount.
@@ -46,17 +45,17 @@ import java.util.List;
 @RunWith(JUnit4.class)
 public class WordCountTest {
 
-  /** Example test that tests a specific DoFn. */
+  /** Example test that tests a specific {@link DoFn}. */
   @Test
-  public void testExtractWordsFn() {
+  public void testExtractWordsFn() throws Exception {
     DoFnTester<String, String> extractWordsFn =
         DoFnTester.of(new ExtractWordsFn());
 
-    Assert.assertThat(extractWordsFn.processBatch(" some  input  words "),
+    Assert.assertThat(extractWordsFn.processBundle(" some  input  words "),
                       CoreMatchers.hasItems("some", "input", "words"));
-    Assert.assertThat(extractWordsFn.processBatch(" "),
+    Assert.assertThat(extractWordsFn.processBundle(" "),
                       CoreMatchers.<String>hasItems());
-    Assert.assertThat(extractWordsFn.processBatch(" some ", " input", " words"),
+    Assert.assertThat(extractWordsFn.processBundle(" some ", " input", " words"),
                       CoreMatchers.hasItems("some", "input", "words"));
   }
 
@@ -69,18 +68,19 @@ public class WordCountTest {
   static final String[] COUNTS_ARRAY = new String[] {
       "hi: 5", "there: 1", "sue: 2", "bob: 2"};
 
+  @Rule
+  public TestPipeline p = TestPipeline.create();
+
   /** Example test that tests a PTransform by using an in-memory input and inspecting the output. */
   @Test
   @Category(RunnableOnService.class)
   public void testCountWords() throws Exception {
-    Pipeline p = TestPipeline.create();
-
     PCollection<String> input = p.apply(Create.of(WORDS).withCoder(StringUtf8Coder.of()));
 
     PCollection<String> output = input.apply(new CountWords())
       .apply(MapElements.via(new FormatAsTextFn()));
 
     PAssert.that(output).containsInAnyOrder(COUNTS_ARRAY);
-    p.run();
+    p.run().waitUntilFinish();
   }
 }

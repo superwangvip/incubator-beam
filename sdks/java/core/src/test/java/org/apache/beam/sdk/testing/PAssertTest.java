@@ -17,22 +17,36 @@
  */
 package org.apache.beam.sdk.testing;
 
-import static org.apache.beam.sdk.testing.SerializableMatchers.anything;
-import static org.apache.beam.sdk.testing.SerializableMatchers.not;
-
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.is;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.google.common.collect.Iterables;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.Serializable;
+import java.util.regex.Pattern;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.AtomicCoder;
 import org.apache.beam.sdk.coders.CoderException;
+import org.apache.beam.sdk.coders.VarLongCoder;
+import org.apache.beam.sdk.io.CountingInput;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.transforms.windowing.FixedWindows;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
+import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
+import org.apache.beam.sdk.transforms.windowing.SlidingWindows;
+import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
-
+import org.apache.beam.sdk.values.TimestampedValue;
+import org.joda.time.Duration;
+import org.joda.time.Instant;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -40,17 +54,15 @@ import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.Serializable;
-import java.util.regex.Pattern;
-
 /**
  * Test case for {@link PAssert}.
  */
 @RunWith(JUnit4.class)
 public class PAssertTest implements Serializable {
+
+  @Rule
+  public final transient TestPipeline pipeline = TestPipeline.create();
+
   @Rule
   public transient ExpectedException thrown = ExpectedException.none();
 
@@ -108,8 +120,6 @@ public class PAssertTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testContainsInAnyOrderNotSerializable() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
     PCollection<NotSerializableObject> pcollection = pipeline
         .apply(Create.of(
           new NotSerializableObject(),
@@ -131,8 +141,6 @@ public class PAssertTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testSerializablePredicate() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
     PCollection<NotSerializableObject> pcollection = pipeline
         .apply(Create.of(
           new NotSerializableObject(),
@@ -151,27 +159,40 @@ public class PAssertTest implements Serializable {
   }
 
   /**
-   * Basic test of succeeding {@link PAssert} using a {@link SerializableMatcher}.
+   * A {@link PAssert} about the contents of a {@link PCollection}
+   * is allows to be verified by an arbitrary {@link SerializableFunction},
+   * though.
    */
   @Test
   @Category(RunnableOnService.class)
-  public void testBasicMatcherSuccess() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-    PCollection<Integer> pcollection = pipeline.apply(Create.of(42));
-    PAssert.that(pcollection).containsInAnyOrder(anything());
-    pipeline.run();
-  }
+  public void testWindowedSerializablePredicate() throws Exception {
+    PCollection<NotSerializableObject> pcollection = pipeline
+        .apply(Create.timestamped(
+            TimestampedValue.of(new NotSerializableObject(), new Instant(250L)),
+            TimestampedValue.of(new NotSerializableObject(), new Instant(500L)))
+            .withCoder(NotSerializableObjectCoder.of()))
+        .apply(Window.<NotSerializableObject>into(FixedWindows.of(Duration.millis(300L))));
 
-  /**
-   * Basic test of failing {@link PAssert} using a {@link SerializableMatcher}.
-   */
-  @Test
-  @Category(RunnableOnService.class)
-  public void testBasicMatcherFailure() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-    PCollection<Integer> pcollection = pipeline.apply(Create.of(42));
-    PAssert.that(pcollection).containsInAnyOrder(not(anything()));
-    runExpectingAssertionFailure(pipeline);
+    PAssert.that(pcollection)
+        .inWindow(new IntervalWindow(new Instant(0L), new Instant(300L)))
+        .satisfies(new SerializableFunction<Iterable<NotSerializableObject>, Void>() {
+          @Override
+          public Void apply(Iterable<NotSerializableObject> contents) {
+            assertThat(Iterables.isEmpty(contents), is(false));
+            return null; // no problem!
+          }
+        });
+    PAssert.that(pcollection)
+        .inWindow(new IntervalWindow(new Instant(300L), new Instant(600L)))
+        .satisfies(new SerializableFunction<Iterable<NotSerializableObject>, Void>() {
+          @Override
+          public Void apply(Iterable<NotSerializableObject> contents) {
+            assertThat(Iterables.isEmpty(contents), is(false));
+            return null; // no problem!
+          }
+        });
+
+    pipeline.run();
   }
 
   /**
@@ -184,7 +205,6 @@ public class PAssertTest implements Serializable {
     thrown.expect(UnsupportedOperationException.class);
     thrown.expectMessage("isEqualTo");
 
-    Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> pcollection = pipeline.apply(Create.of(42));
     PAssert.thatSingleton(pcollection).equals(42);
   }
@@ -199,7 +219,6 @@ public class PAssertTest implements Serializable {
     thrown.expect(UnsupportedOperationException.class);
     thrown.expectMessage("containsInAnyOrder");
 
-    Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> pcollection = pipeline.apply(Create.of(42));
     PAssert.that(pcollection).equals(42);
   }
@@ -214,7 +233,6 @@ public class PAssertTest implements Serializable {
     thrown.expect(UnsupportedOperationException.class);
     thrown.expectMessage(".hashCode() is not supported.");
 
-    Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> pcollection = pipeline.apply(Create.of(42));
     PAssert.thatSingleton(pcollection).hashCode();
   }
@@ -229,7 +247,6 @@ public class PAssertTest implements Serializable {
     thrown.expect(UnsupportedOperationException.class);
     thrown.expectMessage(".hashCode() is not supported.");
 
-    Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> pcollection = pipeline.apply(Create.of(42));
     PAssert.that(pcollection).hashCode();
   }
@@ -240,9 +257,27 @@ public class PAssertTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testIsEqualTo() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> pcollection = pipeline.apply(Create.of(43));
     PAssert.thatSingleton(pcollection).isEqualTo(43);
+    pipeline.run();
+  }
+
+  /**
+   * Basic test for {@code isEqualTo}.
+   */
+  @Test
+  @Category(RunnableOnService.class)
+  public void testWindowedIsEqualTo() throws Exception {
+    PCollection<Integer> pcollection =
+        pipeline.apply(Create.timestamped(TimestampedValue.of(43, new Instant(250L)),
+            TimestampedValue.of(22, new Instant(-250L))))
+            .apply(Window.<Integer>into(FixedWindows.of(Duration.millis(500L))));
+    PAssert.thatSingleton(pcollection)
+        .inOnlyPane(new IntervalWindow(new Instant(0L), new Instant(500L)))
+        .isEqualTo(43);
+    PAssert.thatSingleton(pcollection)
+        .inOnlyPane(new IntervalWindow(new Instant(-500L), new Instant(0L)))
+        .isEqualTo(22);
     pipeline.run();
   }
 
@@ -252,7 +287,6 @@ public class PAssertTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testNotEqualTo() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> pcollection = pipeline.apply(Create.of(43));
     PAssert.thatSingleton(pcollection).notEqualTo(42);
     pipeline.run();
@@ -264,9 +298,62 @@ public class PAssertTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testContainsInAnyOrder() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> pcollection = pipeline.apply(Create.of(1, 2, 3, 4));
     PAssert.that(pcollection).containsInAnyOrder(2, 1, 4, 3);
+    pipeline.run();
+  }
+
+  /**
+   * Tests that {@code containsInAnyOrder} is actually order-independent.
+   */
+  @Test
+  @Category(RunnableOnService.class)
+  public void testGlobalWindowContainsInAnyOrder() throws Exception {
+    PCollection<Integer> pcollection = pipeline.apply(Create.of(1, 2, 3, 4));
+    PAssert.that(pcollection).inWindow(GlobalWindow.INSTANCE).containsInAnyOrder(2, 1, 4, 3);
+    pipeline.run();
+  }
+
+  /**
+   * Tests that windowed {@code containsInAnyOrder} is actually order-independent.
+   */
+  @Test
+  @Category(RunnableOnService.class)
+  public void testWindowedContainsInAnyOrder() throws Exception {
+    PCollection<Integer> pcollection =
+        pipeline.apply(Create.timestamped(TimestampedValue.of(1, new Instant(100L)),
+            TimestampedValue.of(2, new Instant(200L)),
+            TimestampedValue.of(3, new Instant(300L)),
+            TimestampedValue.of(4, new Instant(400L))))
+            .apply(Window.<Integer>into(SlidingWindows.of(Duration.millis(200L))
+                .every(Duration.millis(100L))
+                .withOffset(Duration.millis(50L))));
+
+    PAssert.that(pcollection)
+        .inWindow(new IntervalWindow(new Instant(-50L), new Instant(150L))).containsInAnyOrder(1);
+    PAssert.that(pcollection)
+        .inWindow(new IntervalWindow(new Instant(50L), new Instant(250L)))
+        .containsInAnyOrder(2, 1);
+    PAssert.that(pcollection)
+        .inWindow(new IntervalWindow(new Instant(150L), new Instant(350L)))
+        .containsInAnyOrder(2, 3);
+    PAssert.that(pcollection)
+        .inWindow(new IntervalWindow(new Instant(250L), new Instant(450L)))
+        .containsInAnyOrder(4, 3);
+    PAssert.that(pcollection)
+        .inWindow(new IntervalWindow(new Instant(350L), new Instant(550L)))
+        .containsInAnyOrder(4);
+    pipeline.run();
+  }
+
+  @Test
+  @Category(RunnableOnService.class)
+  public void testEmpty() {
+    PCollection<Long> vals =
+        pipeline.apply(Create.<Long>of().withCoder(VarLongCoder.of()));
+
+    PAssert.that(vals).empty();
+
     pipeline.run();
   }
 
@@ -276,8 +363,6 @@ public class PAssertTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testContainsInAnyOrderFalse() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
     PCollection<Integer> pcollection = pipeline
         .apply(Create.of(1, 2, 3, 4));
 
@@ -294,6 +379,17 @@ public class PAssertTest implements Serializable {
             + exc.getMessage()
             + "\"",
         expectedPattern.matcher(exc.getMessage()).find());
+  }
+
+  @Test
+  @Category(RunnableOnService.class)
+  public void testEmptyFalse() throws Exception {
+    PCollection<Long> vals = pipeline.apply(CountingInput.upTo(5L));
+    PAssert.that(vals).empty();
+
+    Throwable thrown = runExpectingAssertionFailure(pipeline);
+
+    assertThat(thrown.getMessage(), containsString("Expected: iterable over [] in any order"));
   }
 
   private static Throwable runExpectingAssertionFailure(Pipeline pipeline) {

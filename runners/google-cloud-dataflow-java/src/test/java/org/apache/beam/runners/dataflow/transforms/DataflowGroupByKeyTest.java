@@ -17,7 +17,10 @@
  */
 package org.apache.beam.runners.dataflow.transforms;
 
-import org.apache.beam.runners.dataflow.DataflowPipelineRunner;
+import com.google.api.services.dataflow.Dataflow;
+import java.util.Arrays;
+import java.util.List;
+import org.apache.beam.runners.dataflow.DataflowRunner;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
@@ -35,35 +38,42 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TypeDescriptor;
-
 import org.joda.time.Duration;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 
-import java.util.Arrays;
-import java.util.List;
-
-/** Tests for {@link GroupByKey} for the {@link DataflowPipelineRunner}. */
+/** Tests for {@link GroupByKey} for the {@link DataflowRunner}. */
 @RunWith(JUnit4.class)
 public class DataflowGroupByKeyTest {
   @Rule
   public ExpectedException thrown = ExpectedException.none();
 
+  @Mock
+  private Dataflow dataflow;
+
+  @Before
+  public void setUp() {
+    MockitoAnnotations.initMocks(this);
+  }
+
   /**
-   * Create a test pipeline that uses the {@link DataflowPipelineRunner} so that {@link GroupByKey}
+   * Create a test pipeline that uses the {@link DataflowRunner} so that {@link GroupByKey}
    * is not expanded. This is used for verifying that even without expansion the proper errors show
    * up.
    */
   private Pipeline createTestServiceRunner() {
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
-    options.setRunner(DataflowPipelineRunner.class);
+    options.setRunner(DataflowRunner.class);
     options.setProject("someproject");
-    options.setStagingLocation("gs://staging");
+    options.setGcpTempLocation("gs://staging");
     options.setPathValidatorClass(NoopPathValidator.class);
-    options.setDataflowClient(null);
+    options.setDataflowClient(dataflow);
     return Pipeline.create(options);
   }
 
@@ -94,12 +104,12 @@ public class DataflowGroupByKeyTest {
         p.apply(
             new PTransform<PBegin, PCollection<KV<String, Integer>>>() {
               @Override
-              public PCollection<KV<String, Integer>> apply(PBegin input) {
+              public PCollection<KV<String, Integer>> expand(PBegin input) {
                 return PCollection.<KV<String, Integer>>createPrimitiveOutputInternal(
                         input.getPipeline(),
                         WindowingStrategy.globalDefault(),
                         PCollection.IsBounded.UNBOUNDED)
-                    .setTypeDescriptorInternal(new TypeDescriptor<KV<String, Integer>>() {});
+                    .setTypeDescriptor(new TypeDescriptor<KV<String, Integer>>() {});
               }
             });
 

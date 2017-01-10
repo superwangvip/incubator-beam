@@ -17,17 +17,15 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import org.apache.beam.sdk.Pipeline;
+import java.io.Serializable;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TypeDescriptor;
-
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
 
 /**
  * Java 8 tests for {@link MapElements}.
@@ -35,13 +33,16 @@ import java.io.Serializable;
 @RunWith(JUnit4.class)
 public class MapElementsJava8Test implements Serializable {
 
+  @Rule
+  public final transient TestPipeline pipeline = TestPipeline.create();
+
   /**
    * Basic test of {@link MapElements} with a lambda (which is instantiated as a
    * {@link SerializableFunction}).
    */
   @Test
   public void testMapBasic() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
+
     PCollection<Integer> output = pipeline
         .apply(Create.of(1, 2, 3))
         .apply(MapElements
@@ -58,7 +59,7 @@ public class MapElementsJava8Test implements Serializable {
    */
   @Test
   public void testMapMethodReference() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
+
     PCollection<Integer> output = pipeline
         .apply(Create.of(1, 2, 3))
         .apply(MapElements

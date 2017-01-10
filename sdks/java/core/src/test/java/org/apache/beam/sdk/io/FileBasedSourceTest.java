@@ -21,7 +21,6 @@ import static org.apache.beam.sdk.testing.SourceTestUtils.assertSplitAtFractionE
 import static org.apache.beam.sdk.testing.SourceTestUtils.assertSplitAtFractionFails;
 import static org.apache.beam.sdk.testing.SourceTestUtils.assertSplitAtFractionSucceedsAndConsistent;
 import static org.apache.beam.sdk.testing.SourceTestUtils.readFromSource;
-
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
@@ -29,29 +28,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.when;
 
-import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.io.FileBasedSource.FileBasedReader;
-import org.apache.beam.sdk.io.Source.Reader;
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.testing.PAssert;
-import org.apache.beam.sdk.testing.TestPipeline;
-import org.apache.beam.sdk.util.CoderUtils;
-import org.apache.beam.sdk.util.IOChannelFactory;
-import org.apache.beam.sdk.util.IOChannelUtils;
-import org.apache.beam.sdk.values.PCollection;
-
 import com.google.common.collect.ImmutableList;
-
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-import org.mockito.Mockito;
-
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
@@ -65,6 +42,27 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Random;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.io.FileBasedSource.FileBasedReader;
+import org.apache.beam.sdk.io.Source.Reader;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.testing.NeedsRunner;
+import org.apache.beam.sdk.testing.PAssert;
+import org.apache.beam.sdk.testing.TestPipeline;
+import org.apache.beam.sdk.util.CoderUtils;
+import org.apache.beam.sdk.util.IOChannelFactory;
+import org.apache.beam.sdk.util.IOChannelUtils;
+import org.apache.beam.sdk.values.PCollection;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.junit.rules.ExpectedException;
+import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+import org.mockito.Mockito;
 
 /**
  * Tests code common to all file-based sources.
@@ -74,7 +72,9 @@ public class FileBasedSourceTest {
 
   Random random = new Random(0L);
 
+  @Rule public final TestPipeline p = TestPipeline.create();
   @Rule public TemporaryFolder tempFolder = new TemporaryFolder();
+  @Rule public ExpectedException thrown = ExpectedException.none();
 
   /**
    * If {@code splitHeader} is null, this is just a simple line-based reader. Otherwise, the file is
@@ -101,11 +101,6 @@ public class FileBasedSourceTest {
         String splitHeader) {
       super(fileOrPattern, minBundleSize, startOffset, endOffset);
       this.splitHeader = splitHeader;
-    }
-
-    @Override
-    public boolean producesSortedKeys(PipelineOptions options) throws Exception {
-      return false;
     }
 
     @Override
@@ -420,6 +415,16 @@ public class FileBasedSourceTest {
   }
 
   @Test
+  public void testSplittingFailsOnEmptyFileExpansion() throws Exception {
+    PipelineOptions options = PipelineOptionsFactory.create();
+    String missingFilePath = tempFolder.newFolder().getAbsolutePath() + "/missing.txt";
+    TestFileBasedSource source = new TestFileBasedSource(missingFilePath, Long.MAX_VALUE, null);
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage(String.format("Unable to find any files matching %s", missingFilePath));
+    source.splitIntoBundles(1234, options);
+  }
+
+  @Test
   public void testFractionConsumedWhenReadingFilepattern() throws IOException {
     List<String> data1 = createStringDataset(3, 1000);
     File file1 = createFileWithData("file1", data1);
@@ -446,7 +451,7 @@ public class FileBasedSourceTest {
         assertTrue(fractionConsumed > lastFractionConsumed);
         lastFractionConsumed = fractionConsumed;
       }
-      assertTrue(reader.getFractionConsumed() < 1.0);
+      assertEquals(1.0, reader.getFractionConsumed(), 1e-6);
     }
   }
 
@@ -464,7 +469,7 @@ public class FileBasedSourceTest {
                 new File(parent, "file1").getPath(),
                 new File(parent, "file2").getPath(),
                 new File(parent, "file3").getPath()));
-    IOChannelUtils.setIOFactory("mocked", mockIOFactory);
+    IOChannelUtils.setIOFactoryInternal("mocked", mockIOFactory, true /* override */);
 
     List<String> data2 = createStringDataset(3, 50);
     createFileWithData("file2", data2);
@@ -707,23 +712,23 @@ public class FileBasedSourceTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testDataflowFile() throws IOException {
-    Pipeline p = TestPipeline.create();
     List<String> data = createStringDataset(3, 50);
 
     String fileName = "file";
     File file = createFileWithData(fileName, data);
 
     TestFileBasedSource source = new TestFileBasedSource(file.getPath(), 64, null);
-    PCollection<String> output = p.apply(Read.from(source).named("ReadFileData"));
+    PCollection<String> output = p.apply("ReadFileData", Read.from(source));
 
     PAssert.that(output).containsInAnyOrder(data);
     p.run();
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testDataflowFilePattern() throws IOException {
-    Pipeline p = TestPipeline.create();
 
     List<String> data1 = createStringDataset(3, 50);
     File file1 = createFileWithData("file1", data1);
@@ -740,7 +745,7 @@ public class FileBasedSourceTest {
     TestFileBasedSource source =
         new TestFileBasedSource(new File(file1.getParent(), "file*").getPath(), 64, null);
 
-    PCollection<String> output = p.apply(Read.from(source).named("ReadFileData"));
+    PCollection<String> output = p.apply("ReadFileData", Read.from(source));
 
     List<String> expectedResults = new ArrayList<String>();
     expectedResults.addAll(data1);
@@ -915,5 +920,19 @@ public class FileBasedSourceTest {
 
     TestFileBasedSource source = new TestFileBasedSource(file.getPath(), 1, 0, file.length(), null);
     assertSplitAtFractionExhaustive(source, options);
+  }
+
+  @Test
+  public void testToStringFile() throws Exception {
+    String path = "/tmp/foo";
+    TestFileBasedSource source = new TestFileBasedSource(path, 1, 0, 10, null);
+    assertEquals(String.format("%s range [0, 10)", path), source.toString());
+  }
+
+  @Test
+  public void testToStringPattern() throws Exception {
+    String path = "/tmp/foo/*";
+    TestFileBasedSource source = new TestFileBasedSource(path, 1, 0, 10, null);
+    assertEquals(String.format("%s range [0, 10)", path), source.toString());
   }
 }

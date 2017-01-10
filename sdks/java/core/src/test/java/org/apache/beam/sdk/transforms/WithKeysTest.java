@@ -19,20 +19,20 @@ package org.apache.beam.sdk.transforms;
 
 import static org.junit.Assert.assertEquals;
 
-import org.apache.beam.sdk.Pipeline;
+import java.util.Arrays;
+import java.util.List;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TypeDescriptor;
-
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Tests for ExtractKeys transform.
@@ -63,9 +63,12 @@ public class WithKeysTest {
     KV.of(100, "bbb")
   );
 
+  @Rule
+  public final TestPipeline p = TestPipeline.create();
+
   @Test
+  @Category(NeedsRunner.class)
   public void testExtractKeys() {
-    Pipeline p = TestPipeline.create();
 
     PCollection<String> input =
         p.apply(Create.of(Arrays.asList(COLLECTION)).withCoder(
@@ -80,8 +83,8 @@ public class WithKeysTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testConstantKeys() {
-    Pipeline p = TestPipeline.create();
 
     PCollection<String> input =
         p.apply(Create.of(Arrays.asList(COLLECTION)).withCoder(
@@ -101,8 +104,8 @@ public class WithKeysTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testWithKeysWithUnneededWithKeyTypeSucceeds() {
-    TestPipeline p = TestPipeline.create();
 
     PCollection<String> input =
         p.apply(Create.of(Arrays.asList(COLLECTION)).withCoder(

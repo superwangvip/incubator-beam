@@ -17,6 +17,14 @@
  */
 package org.apache.beam.sdk.io;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
+import java.io.OutputStream;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
+import javax.xml.bind.JAXBContext;
+import javax.xml.bind.JAXBException;
+import javax.xml.bind.Marshaller;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.io.FileBasedSink.FileBasedWriteOperation;
 import org.apache.beam.sdk.io.FileBasedSink.FileBasedWriter;
@@ -24,16 +32,6 @@ import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.util.CoderUtils;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.common.base.Preconditions;
-
-import java.io.OutputStream;
-import java.nio.channels.Channels;
-import java.nio.channels.WritableByteChannel;
-
-import javax.xml.bind.JAXBContext;
-import javax.xml.bind.JAXBException;
-import javax.xml.bind.Marshaller;
 
 // CHECKSTYLE.OFF: JavadocStyle
 /**
@@ -178,7 +176,7 @@ public class XmlSink {
      * <p>The specified class must be able to be used to create a JAXB context.
      */
     public <T> Bound<T> ofRecordClass(Class<T> classToBind) {
-      return new Bound<>(classToBind, rootElementName, baseOutputFilename);
+      return new Bound<>(classToBind, rootElementName, baseOutputFilename.get());
     }
 
     /**
@@ -196,7 +194,7 @@ public class XmlSink {
      * supplied name.
      */
     public Bound<T> withRootElement(String rootElementName) {
-      return new Bound<>(classToBind, rootElementName, baseOutputFilename);
+      return new Bound<>(classToBind, rootElementName, baseOutputFilename.get());
     }
 
     /**
@@ -205,9 +203,9 @@ public class XmlSink {
      */
     @Override
     public void validate(PipelineOptions options) {
-      Preconditions.checkNotNull(classToBind, "Missing a class to bind to a JAXB context.");
-      Preconditions.checkNotNull(rootElementName, "Missing a root element name.");
-      Preconditions.checkNotNull(baseOutputFilename, "Missing a filename to write to.");
+      checkNotNull(classToBind, "Missing a class to bind to a JAXB context.");
+      checkNotNull(rootElementName, "Missing a root element name.");
+      checkNotNull(baseOutputFilename, "Missing a filename to write to.");
       try {
         JAXBContext.newInstance(classToBind);
       } catch (JAXBException e) {
@@ -227,8 +225,10 @@ public class XmlSink {
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
       builder
-          .addIfNotNull(DisplayData.item("rootElement", rootElementName))
-          .addIfNotNull(DisplayData.item("recordClass", classToBind));
+          .addIfNotNull(DisplayData.item("rootElement", rootElementName)
+            .withLabel("XML Root Element"))
+          .addIfNotNull(DisplayData.item("recordClass", classToBind)
+            .withLabel("XML Record Class"));
     }
   }
 

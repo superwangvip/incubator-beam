@@ -17,17 +17,16 @@
  */
 package org.apache.beam.sdk.coders;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.beam.sdk.util.Structs.addBoolean;
-
-import org.apache.beam.sdk.util.CloudObject;
-import org.apache.beam.sdk.util.PropertyNames;
-
-import com.google.common.base.Preconditions;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
 import java.util.List;
+import org.apache.beam.sdk.util.CloudObject;
+import org.apache.beam.sdk.util.PropertyNames;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.sdk.values.TypeParameter;
 
 /**
  * An {@link IterableCoder} encodes any {@link Iterable} in the format
@@ -53,8 +52,7 @@ public class IterableCoder<T> extends IterableLikeCoder<T, Iterable<T>> {
   public static IterableCoder<?> of(
       @JsonProperty(PropertyNames.COMPONENT_ENCODINGS)
       List<Coder<?>> components) {
-    Preconditions.checkArgument(components.size() == 1,
-        "Expecting 1 component, got " + components.size());
+    checkArgument(components.size() == 1, "Expecting 1 component, got %s", components.size());
     return of(components.get(0));
   }
 
@@ -72,9 +70,15 @@ public class IterableCoder<T> extends IterableLikeCoder<T, Iterable<T>> {
   }
 
   @Override
-  public CloudObject asCloudObject() {
-    CloudObject result = super.asCloudObject();
+  protected CloudObject initializeCloudObject() {
+    CloudObject result = CloudObject.forClassName("kind:stream");
     addBoolean(result, PropertyNames.IS_STREAM_LIKE, true);
     return result;
+  }
+
+  @Override
+  public TypeDescriptor<Iterable<T>> getEncodedTypeDescriptor() {
+    return new TypeDescriptor<Iterable<T>>() {}.where(
+        new TypeParameter<T>() {}, getElemCoder().getEncodedTypeDescriptor());
   }
 }

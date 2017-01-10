@@ -17,7 +17,7 @@
  */
 package org.apache.beam.runners.direct;
 
-import org.apache.beam.runners.direct.InProcessPipelineRunner.UncommittedBundle;
+import org.apache.beam.runners.direct.DirectRunner.UncommittedBundle;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
 import org.apache.beam.sdk.util.WindowedValue;
 
@@ -42,8 +42,8 @@ class PassthroughTransformEvaluator<InputT> implements TransformEvaluator<InputT
   }
 
   @Override
-  public InProcessTransformResult finishBundle() throws Exception {
-    return StepTransformResult.withoutHold(transform).addOutput(output).build();
+  public TransformResult<InputT> finishBundle() throws Exception {
+    return StepTransformResult.<InputT>withoutHold(transform).addOutput(output).build();
   }
 
 }

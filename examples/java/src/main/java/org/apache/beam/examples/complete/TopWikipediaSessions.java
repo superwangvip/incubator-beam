@@ -17,7 +17,8 @@
  */
 package org.apache.beam.examples.complete;
 
-import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
+import com.google.api.services.bigquery.model.TableRow;
+import java.util.List;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.TableRowJsonCoder;
 import org.apache.beam.sdk.io.TextIO;
@@ -28,24 +29,19 @@ import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.Validation;
 import org.apache.beam.sdk.transforms.Count;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.DoFn.RequiresWindowAccess;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableComparator;
 import org.apache.beam.sdk.transforms.Top;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.CalendarWindows;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.transforms.windowing.Sessions;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.api.services.bigquery.model.TableRow;
-
 import org.joda.time.Duration;
 import org.joda.time.Instant;
-
-import java.util.List;
 
 /**
  * An example that reads Wikipedia edit data from Cloud Storage and computes the user with
@@ -56,38 +52,26 @@ import java.util.List;
  * <p>It is not recommended to execute this pipeline locally, given the size of the default input
  * data.
  *
- * <p>To execute this pipeline using the Dataflow service, specify pipeline configuration:
+ * <p>To execute this pipeline using a selected runner and an output prefix on GCS, specify:
  * <pre>{@code
- *   --project=YOUR_PROJECT_ID
- *   --tempLocation=gs://YOUR_TEMP_DIRECTORY
- *   --runner=BlockingDataflowPipelineRunner
- * }
- * </pre>
- * and an output prefix on GCS:
- * <pre>{@code
+ *   --runner=YOUR_SELECTED_RUNNER
  *   --output=gs://YOUR_OUTPUT_PREFIX
- * }</pre>
- *
- * <p>The default input is {@code gs://dataflow-samples/wikipedia_edits/*.json} and can be
- * overridden with {@code --input}.
- *
- * <p>The input for this example is large enough that it's a good place to enable (experimental)
- * autoscaling:
- * <pre>{@code
- *   --autoscalingAlgorithm=BASIC
- *   --maxNumWorkers=20
  * }
  * </pre>
- * This will automatically scale the number of workers up over time until the job completes.
+ * See examples/java/README.md for instructions about how to configure different runners.
+ *
+ * <p>The default input is {@code gs://apache-beam-samples/wikipedia_edits/*.json} and can be
+ * overridden with {@code --input}.
  */
 public class TopWikipediaSessions {
-  private static final String EXPORTED_WIKI_TABLE = "gs://dataflow-samples/wikipedia_edits/*.json";
+  private static final String EXPORTED_WIKI_TABLE =
+      "gs://apache-beam-samples/wikipedia_edits/*.json";
 
   /**
    * Extracts user and timestamp from a TableRow representing a Wikipedia edit.
    */
   static class ExtractUserAndTimestamp extends DoFn<TableRow, String> {
-    @Override
+    @ProcessElement
     public void processElement(ProcessContext c) {
       TableRow row = c.element();
       int timestamp = (Integer) row.get("timestamp");
@@ -106,7 +90,7 @@ public class TopWikipediaSessions {
   static class ComputeSessions
       extends PTransform<PCollection<String>, PCollection<KV<String, Long>>> {
     @Override
-    public PCollection<KV<String, Long>> apply(PCollection<String> actions) {
+    public PCollection<KV<String, Long>> expand(PCollection<String> actions) {
       return actions
           .apply(Window.<String>into(Sessions.withGapDuration(Duration.standardHours(1))))
 
@@ -120,7 +104,7 @@ public class TopWikipediaSessions {
   private static class TopPerMonth
       extends PTransform<PCollection<KV<String, Long>>, PCollection<List<KV<String, Long>>>> {
     @Override
-    public PCollection<List<KV<String, Long>>> apply(PCollection<KV<String, Long>> sessions) {
+    public PCollection<List<KV<String, Long>>> expand(PCollection<KV<String, Long>> sessions) {
       return sessions
         .apply(Window.<KV<String, Long>>into(CalendarWindows.months(1)))
 
@@ -133,24 +117,21 @@ public class TopWikipediaSessions {
     }
   }
 
-  static class SessionsToStringsDoFn extends DoFn<KV<String, Long>, KV<String, Long>>
-      implements RequiresWindowAccess {
-
-    @Override
-    public void processElement(ProcessContext c) {
+  static class SessionsToStringsDoFn extends DoFn<KV<String, Long>, KV<String, Long>> {
+    @ProcessElement
+    public void processElement(ProcessContext c, BoundedWindow window) {
       c.output(KV.of(
-          c.element().getKey() + " : " + c.window(), c.element().getValue()));
+          c.element().getKey() + " : " + window, c.element().getValue()));
     }
   }
 
-  static class FormatOutputDoFn extends DoFn<List<KV<String, Long>>, String>
-      implements RequiresWindowAccess {
-    @Override
-    public void processElement(ProcessContext c) {
+  static class FormatOutputDoFn extends DoFn<List<KV<String, Long>>, String> {
+    @ProcessElement
+    public void processElement(ProcessContext c, BoundedWindow window) {
       for (KV<String, Long> item : c.element()) {
         String session = item.getKey();
         long count = item.getValue();
-        c.output(session + " : " + count + " : " + ((IntervalWindow) c.window()).start());
+        c.output(session + " : " + count + " : " + ((IntervalWindow) window).start());
       }
     }
   }
@@ -164,13 +145,13 @@ public class TopWikipediaSessions {
     }
 
     @Override
-    public PCollection<String> apply(PCollection<TableRow> input) {
+    public PCollection<String> expand(PCollection<TableRow> input) {
       return input
           .apply(ParDo.of(new ExtractUserAndTimestamp()))
 
-          .apply(ParDo.named("SampleUsers").of(
+          .apply("SampleUsers", ParDo.of(
               new DoFn<String, String>() {
-                @Override
+                @ProcessElement
                 public void processElement(ProcessContext c) {
                   if (Math.abs(c.element().hashCode()) <= Integer.MAX_VALUE * samplingThreshold) {
                     c.output(c.element());
@@ -179,19 +160,18 @@ public class TopWikipediaSessions {
               }))
 
           .apply(new ComputeSessions())
-
-          .apply(ParDo.named("SessionsToStrings").of(new SessionsToStringsDoFn()))
+          .apply("SessionsToStrings", ParDo.of(new SessionsToStringsDoFn()))
           .apply(new TopPerMonth())
-          .apply(ParDo.named("FormatOutput").of(new FormatOutputDoFn()));
+          .apply("FormatOutput", ParDo.of(new FormatOutputDoFn()));
     }
   }
 
   /**
    * Options supported by this class.
    *
-   * <p>Inherits standard Dataflow configuration options.
+   * <p>Inherits standard Beam configuration options.
    */
-  private static interface Options extends PipelineOptions {
+  public interface Options extends PipelineOptions {
     @Description(
       "Input specified as a GCS path containing a BigQuery table exported as json")
     @Default.String(EXPORTED_WIKI_TABLE)
@@ -208,9 +188,8 @@ public class TopWikipediaSessions {
     Options options = PipelineOptionsFactory.fromArgs(args)
         .withValidation()
         .as(Options.class);
-    DataflowPipelineOptions dataflowOptions = options.as(DataflowPipelineOptions.class);
 
-    Pipeline p = Pipeline.create(dataflowOptions);
+    Pipeline p = Pipeline.create(options);
 
     double samplingThreshold = 0.1;
 
@@ -218,8 +197,8 @@ public class TopWikipediaSessions {
         .from(options.getInput())
         .withCoder(TableRowJsonCoder.of()))
      .apply(new ComputeTopSessions(samplingThreshold))
-     .apply(TextIO.Write.named("Write").withoutSharding().to(options.getOutput()));
+     .apply("Write", TextIO.Write.withoutSharding().to(options.getOutput()));
 
-    p.run();
+    p.run().waitUntilFinish();
   }
 }

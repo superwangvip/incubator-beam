@@ -20,6 +20,11 @@ package org.apache.beam.runners.flink;
 
 import static org.junit.Assert.assertNotNull;
 
+import com.google.common.base.Joiner;
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.net.URI;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
@@ -27,16 +32,9 @@ import org.apache.beam.sdk.io.Sink;
 import org.apache.beam.sdk.io.Write;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.Create;
-
-import com.google.common.base.Joiner;
-
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.test.util.JavaProgramTestBase;
-
-import java.io.File;
-import java.io.PrintWriter;
-import java.net.URI;
 
 /**
  * Tests the translation of custom Write.Bound sinks.
@@ -53,7 +51,7 @@ public class WriteSinkITCase extends JavaProgramTestBase {
 
   @Override
   protected void preSubmit() throws Exception {
-    resultPath = getTempDirPath("result");
+    resultPath = getTempDirPath("result-" + System.nanoTime());
   }
 
   @Override
@@ -64,6 +62,17 @@ public class WriteSinkITCase extends JavaProgramTestBase {
   @Override
   protected void testProgram() throws Exception {
     runProgram(resultPath);
+  }
+
+  @Override
+  public void stopCluster() throws Exception {
+    try {
+      super.stopCluster();
+    } catch (final IOException ioe) {
+      if (ioe.getMessage().startsWith("Unable to delete file")) {
+        // that's ok for the test itself, just the OS playing with us on cleanup phase
+      }
+    }
   }
 
   private static void runProgram(String resultPath) {
@@ -109,7 +118,8 @@ public class WriteSinkITCase extends JavaProgramTestBase {
       }
 
       @Override
-      public void finalize(Iterable<String> writerResults, PipelineOptions options) throws Exception {
+      public void finalize(Iterable<String> writerResults, PipelineOptions options)
+          throws Exception {
 
       }
 

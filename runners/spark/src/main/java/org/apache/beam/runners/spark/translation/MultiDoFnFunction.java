@@ -18,23 +18,29 @@
 
 package org.apache.beam.runners.spark.translation;
 
-import org.apache.beam.runners.spark.util.BroadcastHelper;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.beam.sdk.values.TupleTag;
-
 import com.google.common.base.Function;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.LinkedListMultimap;
 import com.google.common.collect.Multimap;
-
-import org.apache.spark.api.java.function.PairFlatMapFunction;
-import org.joda.time.Instant;
-
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
+import org.apache.beam.runners.core.DoFnRunner;
+import org.apache.beam.runners.core.DoFnRunners;
+import org.apache.beam.runners.spark.aggregators.NamedAggregators;
+import org.apache.beam.runners.spark.aggregators.SparkAggregators;
+import org.apache.beam.runners.spark.util.BroadcastHelper;
+import org.apache.beam.runners.spark.util.SparkSideInputReader;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.sdk.util.WindowingStrategy;
+import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.TupleTag;
+import org.apache.spark.Accumulator;
+import org.apache.spark.api.java.function.PairFlatMapFunction;
 
 import scala.Tuple2;
+
 
 /**
  * DoFunctions ignore side outputs. MultiDoFunctions deal with side outputs by enriching the
@@ -43,81 +49,91 @@ import scala.Tuple2;
  * @param <InputT> Input type for DoFunction.
  * @param <OutputT> Output type for DoFunction.
  */
-class MultiDoFnFunction<InputT, OutputT>
+public class MultiDoFnFunction<InputT, OutputT>
     implements PairFlatMapFunction<Iterator<WindowedValue<InputT>>, TupleTag<?>, WindowedValue<?>> {
-  private final DoFn<InputT, OutputT> mFunction;
-  private final SparkRuntimeContext mRuntimeContext;
-  private final TupleTag<OutputT> mMainOutputTag;
-  private final Map<TupleTag<?>, BroadcastHelper<?>> mSideInputs;
 
-  MultiDoFnFunction(
-      DoFn<InputT, OutputT> fn,
+  private final Accumulator<NamedAggregators> accumulator;
+  private final DoFn<InputT, OutputT> doFn;
+  private final SparkRuntimeContext runtimeContext;
+  private final TupleTag<OutputT> mainOutputTag;
+  private final Map<TupleTag<?>, KV<WindowingStrategy<?, ?>, BroadcastHelper<?>>> sideInputs;
+  private final WindowingStrategy<?, ?> windowingStrategy;
+
+  /**
+   * @param accumulator       The Spark {@link Accumulator} that backs the Beam Aggregators.
+   * @param doFn              The {@link DoFn} to be wrapped.
+   * @param runtimeContext    The {@link SparkRuntimeContext}.
+   * @param mainOutputTag     The main output {@link TupleTag}.
+   * @param sideInputs        Side inputs used in this {@link DoFn}.
+   * @param windowingStrategy Input {@link WindowingStrategy}.
+   */
+  public MultiDoFnFunction(
+      Accumulator<NamedAggregators> accumulator,
+      DoFn<InputT, OutputT> doFn,
       SparkRuntimeContext runtimeContext,
       TupleTag<OutputT> mainOutputTag,
-      Map<TupleTag<?>, BroadcastHelper<?>> sideInputs) {
-    this.mFunction = fn;
-    this.mRuntimeContext = runtimeContext;
-    this.mMainOutputTag = mainOutputTag;
-    this.mSideInputs = sideInputs;
+      Map<TupleTag<?>, KV<WindowingStrategy<?, ?>,
+      BroadcastHelper<?>>> sideInputs,
+      WindowingStrategy<?, ?> windowingStrategy) {
+
+    this.accumulator = accumulator;
+    this.doFn = doFn;
+    this.runtimeContext = runtimeContext;
+    this.mainOutputTag = mainOutputTag;
+    this.sideInputs = sideInputs;
+    this.windowingStrategy = windowingStrategy;
   }
 
   @Override
-  public Iterable<Tuple2<TupleTag<?>, WindowedValue<?>>>
-      call(Iterator<WindowedValue<InputT>> iter) throws Exception {
-    ProcCtxt ctxt = new ProcCtxt(mFunction, mRuntimeContext, mSideInputs);
-    mFunction.startBundle(ctxt);
-    ctxt.setup();
-    return ctxt.getOutputIterable(iter, mFunction);
+  public Iterable<Tuple2<TupleTag<?>, WindowedValue<?>>> call(
+      Iterator<WindowedValue<InputT>> iter) throws Exception {
+
+    DoFnOutputManager outputManager = new DoFnOutputManager();
+    DoFnRunner<InputT, OutputT> doFnRunner =
+        DoFnRunners.createDefault(
+            runtimeContext.getPipelineOptions(),
+            doFn,
+            new SparkSideInputReader(sideInputs),
+            outputManager,
+            mainOutputTag,
+            Collections.<TupleTag<?>>emptyList(),
+            new SparkProcessContext.NoOpStepContext(),
+            new SparkAggregators.Factory(runtimeContext, accumulator),
+            windowingStrategy
+        );
+
+    return new SparkProcessContext<>(doFn, doFnRunner, outputManager).processPartition(iter);
   }
 
-  private class ProcCtxt
-      extends SparkProcessContext<InputT, OutputT, Tuple2<TupleTag<?>, WindowedValue<?>>> {
+  private class DoFnOutputManager
+      implements SparkProcessContext.SparkOutputManager<Tuple2<TupleTag<?>, WindowedValue<?>>> {
 
-    private final Multimap<TupleTag<?>, WindowedValue<?>> outputs = LinkedListMultimap.create();
-
-    ProcCtxt(DoFn<InputT, OutputT> fn, SparkRuntimeContext runtimeContext, Map<TupleTag<?>,
-        BroadcastHelper<?>> sideInputs) {
-      super(fn, runtimeContext, sideInputs);
-    }
+    private final Multimap<TupleTag<?>, WindowedValue<?>> outputs = LinkedListMultimap.create();;
 
     @Override
-    public synchronized void output(OutputT o) {
-      outputs.put(mMainOutputTag, windowedValue.withValue(o));
-    }
-
-    @Override
-    public synchronized void output(WindowedValue<OutputT> o) {
-      outputs.put(mMainOutputTag, o);
-    }
-
-    @Override
-    public synchronized <T> void sideOutput(TupleTag<T> tag, T t) {
-      outputs.put(tag, windowedValue.withValue(t));
-    }
-
-    @Override
-    public <T> void sideOutputWithTimestamp(TupleTag<T> tupleTag, T t, Instant instant) {
-      outputs.put(tupleTag, WindowedValue.of(t, instant,
-          windowedValue.getWindows(), windowedValue.getPane()));
-    }
-
-    @Override
-    protected void clearOutput() {
+    public void clear() {
       outputs.clear();
     }
 
     @Override
-    protected Iterator<Tuple2<TupleTag<?>, WindowedValue<?>>> getOutputIterator() {
-      return Iterators.transform(outputs.entries().iterator(),
-          new Function<Map.Entry<TupleTag<?>, WindowedValue<?>>,
-              Tuple2<TupleTag<?>, WindowedValue<?>>>() {
-        @Override
-        public Tuple2<TupleTag<?>, WindowedValue<?>> apply(Map.Entry<TupleTag<?>,
-            WindowedValue<?>> input) {
-          return new Tuple2<TupleTag<?>, WindowedValue<?>>(input.getKey(), input.getValue());
-        }
-      });
+    public Iterator<Tuple2<TupleTag<?>, WindowedValue<?>>> iterator() {
+      Iterator<Map.Entry<TupleTag<?>, WindowedValue<?>>> entryIter = outputs.entries().iterator();
+      return Iterators.transform(entryIter, this.<TupleTag<?>, WindowedValue<?>>entryToTupleFn());
     }
 
+    private <K, V> Function<Map.Entry<K, V>, Tuple2<K, V>> entryToTupleFn() {
+      return new Function<Map.Entry<K, V>, Tuple2<K, V>>() {
+        @Override
+        public Tuple2<K, V> apply(Map.Entry<K, V> en) {
+          return new Tuple2<>(en.getKey(), en.getValue());
+        }
+      };
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public synchronized <T> void output(TupleTag<T> tag, WindowedValue<T> output) {
+      outputs.put(tag, output);
+    }
   }
 }

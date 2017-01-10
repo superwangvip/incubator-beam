@@ -23,9 +23,8 @@ import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisp
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 
-import org.apache.beam.sdk.transforms.display.DisplayData;
 import com.google.common.collect.Lists;
-
+import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -36,19 +35,18 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class MinTest {
   @Test
-  public void testMeanGetNames() {
-    assertEquals("Min.Globally", Min.integersGlobally().getName());
-    assertEquals("Min.Globally", Min.doublesGlobally().getName());
-    assertEquals("Min.Globally", Min.longsGlobally().getName());
-    assertEquals("Min.PerKey", Min.integersPerKey().getName());
-    assertEquals("Min.PerKey", Min.doublesPerKey().getName());
-    assertEquals("Min.PerKey", Min.longsPerKey().getName());
+  public void testMinGetNames() {
+    assertEquals("Combine.globally(MinInteger)", Min.integersGlobally().getName());
+    assertEquals("Combine.globally(MinDouble)", Min.doublesGlobally().getName());
+    assertEquals("Combine.globally(MinLong)", Min.longsGlobally().getName());
+    assertEquals("Combine.perKey(MinInteger)", Min.integersPerKey().getName());
+    assertEquals("Combine.perKey(MinDouble)", Min.doublesPerKey().getName());
+    assertEquals("Combine.perKey(MinLong)", Min.longsPerKey().getName());
   }
-
   @Test
   public void testMinIntegerFn() {
     checkCombineFn(
-        new Min.MinIntegerFn(),
+        Min.ofIntegers(),
         Lists.newArrayList(1, 2, 3, 4),
         1);
   }
@@ -56,7 +54,7 @@ public class MinTest {
   @Test
   public void testMinLongFn() {
     checkCombineFn(
-        new Min.MinLongFn(),
+        Min.ofLongs(),
         Lists.newArrayList(1L, 2L, 3L, 4L),
         1L);
   }
@@ -64,7 +62,7 @@ public class MinTest {
   @Test
   public void testMinDoubleFn() {
     checkCombineFn(
-        new Min.MinDoubleFn(),
+        Min.ofDoubles(),
         Lists.newArrayList(1.0, 2.0, 3.0, 4.0),
         1.0);
   }

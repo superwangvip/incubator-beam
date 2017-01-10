@@ -17,34 +17,36 @@
  */
 package org.apache.beam.sdk.options;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.internal.matchers.ThrowableMessageMatcher.hasMessage;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
-import org.apache.beam.sdk.options.GcpOptions.DefaultProjectFactory;
-import org.apache.beam.sdk.testing.RestoreSystemProperties;
-
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Files;
-
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
-import org.junit.rules.TestRule;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import org.apache.beam.sdk.options.GcpOptions.DefaultProjectFactory;
+import org.apache.beam.sdk.testing.RestoreSystemProperties;
+import org.apache.beam.sdk.util.NoopPathValidator;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.ExpectedException;
+import org.junit.rules.TemporaryFolder;
+import org.junit.rules.TestRule;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /** Tests for {@link GcpOptions}. */
 @RunWith(JUnit4.class)
 public class GcpOptionsTest {
   @Rule public TestRule restoreSystemProperties = new RestoreSystemProperties();
   @Rule public TemporaryFolder tmpFolder = new TemporaryFolder();
+  @Rule public ExpectedException thrown = ExpectedException.none();
 
   @Test
   public void testGetProjectFromCloudSdkConfigEnv() throws Exception {
@@ -102,6 +104,50 @@ public class GcpOptionsTest {
     DefaultProjectFactory projectFactory = spy(new DefaultProjectFactory());
     when(projectFactory.getEnvironment()).thenReturn(ImmutableMap.<String, String>of());
     assertNull(projectFactory.create(PipelineOptionsFactory.create()));
+  }
+
+  @Test
+  public void testEmptyGcpTempLocation() throws Exception {
+    GcpOptions options = PipelineOptionsFactory.as(GcpOptions.class);
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage(
+        "Error constructing default value for gcpTempLocation: tempLocation is not set");
+    options.getGcpTempLocation();
+  }
+
+  @Test
+  public void testDefaultGcpTempLocation() throws Exception {
+    GcpOptions options = PipelineOptionsFactory.as(GcpOptions.class);
+    String tempLocation = "gs://bucket";
+    options.setTempLocation(tempLocation);
+    options.as(GcsOptions.class).setPathValidatorClass(NoopPathValidator.class);
+    assertEquals(tempLocation, options.getGcpTempLocation());
+  }
+
+  @Test
+  public void testDefaultGcpTempLocationInvalid() throws Exception {
+    GcpOptions options = PipelineOptionsFactory.as(GcpOptions.class);
+    options.setTempLocation("file://");
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage(
+        "Error constructing default value for gcpTempLocation: tempLocation is not"
+            + " a valid GCS path");
+    options.getGcpTempLocation();
+  }
+
+  @Test
+  public void testDefaultGcpTempLocationDoesNotExist() {
+    GcpOptions options = PipelineOptionsFactory.as(GcpOptions.class);
+    String tempLocation = "gs://does/not/exist";
+    options.setTempLocation(tempLocation);
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage(
+        "Error constructing default value for gcpTempLocation: tempLocation is not"
+            + " a valid GCS path");
+    thrown.expectCause(
+        hasMessage(containsString("Output path does not exist or is not writeable")));
+
+    options.getGcpTempLocation();
   }
 
   private static void makePropertiesFileWithProject(File path, String projectId)

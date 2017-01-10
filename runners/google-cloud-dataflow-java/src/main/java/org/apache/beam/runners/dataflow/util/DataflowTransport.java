@@ -20,18 +20,18 @@ package org.apache.beam.runners.dataflow.util;
 import static org.apache.beam.sdk.util.Transport.getJsonFactory;
 import static org.apache.beam.sdk.util.Transport.getTransport;
 
-import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
-import org.apache.beam.sdk.util.RetryHttpRequestInitializer;
-
-import com.google.api.client.auth.oauth2.Credential;
 import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.services.clouddebugger.v2.Clouddebugger;
 import com.google.api.services.dataflow.Dataflow;
+import com.google.auth.Credentials;
+import com.google.auth.http.HttpCredentialsAdapter;
 import com.google.cloud.hadoop.util.ChainingHttpRequestInitializer;
 import com.google.common.collect.ImmutableList;
-
 import java.net.MalformedURLException;
 import java.net.URL;
+import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
+import org.apache.beam.sdk.util.NullCredentialInitializer;
+import org.apache.beam.sdk.util.RetryHttpRequestInitializer;
 
 /**
  * Helpers for cloud communication.
@@ -52,8 +52,8 @@ public class DataflowTransport {
   private static ApiComponents apiComponentsFromUrl(String urlString) {
     try {
       URL url = new URL(urlString);
-      String rootUrl = url.getProtocol() + "://" + url.getHost() +
-          (url.getPort() > 0 ? ":" + url.getPort() : "");
+      String rootUrl = url.getProtocol() + "://" + url.getHost()
+          + (url.getPort() > 0 ? ":" + url.getPort() : "");
       return new ApiComponents(rootUrl, url.getPath());
     } catch (MalformedURLException e) {
       throw new RuntimeException("Invalid URL: " + urlString);
@@ -92,23 +92,13 @@ public class DataflowTransport {
         .setGoogleClientRequestInitializer(options.getGoogleApiTrace());
   }
 
-  /**
-   * Returns a Dataflow client that does not automatically retry failed
-   * requests.
-   */
-  public static Dataflow.Builder
-      newRawDataflowClient(DataflowPipelineOptions options) {
-    return newDataflowClient(options)
-        .setHttpRequestInitializer(options.getGcpCredential())
-        .setGoogleClientRequestInitializer(options.getGoogleApiTrace());
-  }
-
   private static HttpRequestInitializer chainHttpRequestInitializer(
-      Credential credential, HttpRequestInitializer httpRequestInitializer) {
+      Credentials credential, HttpRequestInitializer httpRequestInitializer) {
     if (credential == null) {
-      return httpRequestInitializer;
-    } else {
-      return new ChainingHttpRequestInitializer(credential, httpRequestInitializer);
+      NullCredentialInitializer.throwNullCredentialException();
     }
+    return new ChainingHttpRequestInitializer(
+        new HttpCredentialsAdapter(credential),
+        httpRequestInitializer);
   }
 }

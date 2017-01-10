@@ -56,14 +56,13 @@ public class Keys<K> extends PTransform<PCollection<? extends KV<K, ?>>,
   private Keys() { }
 
   @Override
-  public PCollection<K> apply(PCollection<? extends KV<K, ?>> in) {
+  public PCollection<K> expand(PCollection<? extends KV<K, ?>> in) {
     return
-        in.apply(ParDo.named("Keys")
-                 .of(new DoFn<KV<K, ?>, K>() {
-                     @Override
-                     public void processElement(ProcessContext c) {
-                       c.output(c.element().getKey());
-                     }
-                    }));
+        in.apply("Keys", MapElements.via(new SimpleFunction<KV<K, ?>, K>() {
+          @Override
+          public K apply(KV<K, ?> kv) {
+            return kv.getKey();
+          }
+        }));
   }
 }

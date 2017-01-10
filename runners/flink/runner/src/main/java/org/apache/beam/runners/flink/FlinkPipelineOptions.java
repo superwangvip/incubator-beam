@@ -18,43 +18,33 @@
 package org.apache.beam.runners.flink;
 
 
-import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
 import org.apache.beam.sdk.options.ApplicationNameOptions;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.StreamingOptions;
-
-import com.fasterxml.jackson.annotation.JsonIgnore;
-
-import java.util.List;
+import org.apache.flink.runtime.state.AbstractStateBackend;
 
 /**
  * Options which can be used to configure a Flink PipelineRunner.
  */
-public interface FlinkPipelineOptions extends PipelineOptions, ApplicationNameOptions, StreamingOptions {
+public interface FlinkPipelineOptions
+    extends PipelineOptions, ApplicationNameOptions, StreamingOptions {
 
   /**
    * List of local files to make available to workers.
-   * <p>
-   * Jars are placed on the worker's classpath.
-   * <p>
-   * The default value is the list of jars from the main program's classpath.
+   *
+   * <p>Jars are placed on the worker's classpath.
+   *
+   * <p>The default value is the list of jars from the main program's classpath.
    */
-  @Description("Jar-Files to send to all workers and put on the classpath. " +
-      "The default value is all files from the classpath.")
+  @Description("Jar-Files to send to all workers and put on the classpath. "
+      + "The default value is all files from the classpath.")
   @JsonIgnore
   List<String> getFilesToStage();
   void setFilesToStage(List<String> value);
-
-  /**
-   * The job name is used to identify jobs running on a Flink cluster.
-   */
-  @Description("Dataflow job name, to uniquely identify active jobs. "
-      + "Defaults to using the ApplicationName-UserName-Date.")
-  @Default.InstanceFactory(DataflowPipelineOptions.JobNameFactory.class)
-  String getJobName();
-  void setJobName(String value);
 
   /**
    * The url of the Flink JobManager on which to execute pipelines. This can either be
@@ -63,9 +53,9 @@ public interface FlinkPipelineOptions extends PipelineOptions, ApplicationNameOp
    * Cluster in the JVM, "[collection]" will execute the pipeline on Java Collections while
    * "[auto]" will let the system decide where to execute the pipeline based on the environment.
    */
-  @Description("Address of the Flink Master where the Pipeline should be executed. Can" +
-      " either be of the form \"host:port\" or one of the special values [local], " +
-      "[collection] or [auto].")
+  @Description("Address of the Flink Master where the Pipeline should be executed. Can"
+      + " either be of the form \"host:port\" or one of the special values [local], "
+      + "[collection] or [auto].")
   String getFlinkMaster();
   void setFlinkMaster(String value);
 
@@ -74,21 +64,38 @@ public interface FlinkPipelineOptions extends PipelineOptions, ApplicationNameOp
   Integer getParallelism();
   void setParallelism(Integer value);
 
-  @Description("The interval between consecutive checkpoints (i.e. snapshots of the current pipeline state used for " +
-      "fault tolerance).")
+  @Description("The interval between consecutive checkpoints (i.e. snapshots of the current"
+      + "pipeline state used for fault tolerance).")
   @Default.Long(-1L)
   Long getCheckpointingInterval();
   void setCheckpointingInterval(Long interval);
 
-  @Description("Sets the number of times that failed tasks are re-executed. " +
-      "A value of zero effectively disables fault tolerance. A value of -1 indicates " +
-      "that the system default value (as defined in the configuration) should be used.")
+  @Description("Sets the number of times that failed tasks are re-executed. "
+      + "A value of zero effectively disables fault tolerance. A value of -1 indicates "
+      + "that the system default value (as defined in the configuration) should be used.")
   @Default.Integer(-1)
   Integer getNumberOfExecutionRetries();
   void setNumberOfExecutionRetries(Integer retries);
 
-  @Description("Sets the delay between executions. A value of {@code -1} indicates that the default value should be used.")
+  @Description("Sets the delay between executions. A value of {@code -1} "
+      + "indicates that the default value should be used.")
   @Default.Long(-1L)
   Long getExecutionRetryDelay();
   void setExecutionRetryDelay(Long delay);
+
+  @Description("Sets the behavior of reusing objects.")
+  @Default.Boolean(false)
+  Boolean getObjectReuse();
+  void setObjectReuse(Boolean reuse);
+
+  /**
+   * Sets a state backend to store Beam's state during computation.
+   * Note: Only applicable when executing in streaming mode.
+   * @param stateBackend The state backend to use
+   */
+  @Description("Sets the state backend to use in streaming mode. "
+      + "Otherwise the default is read from the Flink config.")
+  void setStateBackend(AbstractStateBackend stateBackend);
+  AbstractStateBackend getStateBackend();
+
 }

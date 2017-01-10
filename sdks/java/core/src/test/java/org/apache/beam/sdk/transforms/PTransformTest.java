@@ -22,7 +22,6 @@ import static org.junit.Assert.assertThat;
 
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.values.PCollection;
-
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -35,7 +34,12 @@ public class PTransformTest {
   @Test
   public void testPopulateDisplayDataDefaultBehavior() {
     PTransform<PCollection<String>, PCollection<String>> transform =
-        new PTransform<PCollection<String>, PCollection<String>>() {};
+        new PTransform<PCollection<String>, PCollection<String>>() {
+          @Override
+          public PCollection<String> expand(PCollection<String> begin) {
+            throw new IllegalArgumentException("Should never be applied");
+          }
+        };
     DisplayData displayData = DisplayData.from(transform);
     assertThat(displayData.items(), empty());
   }

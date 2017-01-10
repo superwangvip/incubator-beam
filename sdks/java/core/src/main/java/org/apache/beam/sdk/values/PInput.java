@@ -17,9 +17,8 @@
  */
 package org.apache.beam.sdk.values;
 
+import java.util.List;
 import org.apache.beam.sdk.Pipeline;
-
-import java.util.Collection;
 
 /**
  * The interface for things that might be input to a
@@ -29,7 +28,7 @@ public interface PInput {
   /**
    * Returns the owning {@link Pipeline} of this {@link PInput}.
    */
-  public Pipeline getPipeline();
+  Pipeline getPipeline();
 
   /**
    * Expands this {@link PInput} into a list of its component output
@@ -44,14 +43,5 @@ public interface PInput {
    *
    * <p>Not intended to be invoked directly by user code.
    */
-  public Collection<? extends PValue> expand();
-
-  /**
-   * <p>After building, finalizes this {@code PInput} to make it ready for
-   * being used as an input to a {@link org.apache.beam.sdk.transforms.PTransform}.
-   *
-   * <p>Automatically invoked whenever {@code apply()} is invoked on
-   * this {@code PInput}, so users do not normally call this explicitly.
-   */
-  public void finishSpecifying();
+  List<TaggedPValue> expand();
 }

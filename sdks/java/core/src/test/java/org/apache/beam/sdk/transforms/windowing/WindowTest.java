@@ -19,8 +19,7 @@ package org.apache.beam.sdk.transforms.windowing;
 
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasKey;
-import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.includesDisplayDataFrom;
-
+import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.includesDisplayDataFor;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.isOneOf;
 import static org.hamcrest.Matchers.not;
@@ -29,7 +28,7 @@ import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.when;
 
-import org.apache.beam.sdk.Pipeline;
+import java.io.Serializable;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.Coder.NonDeterministicException;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
@@ -44,7 +43,6 @@ import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.util.WindowingStrategy.AccumulationMode;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.TimestampedValue;
-
 import org.hamcrest.Matchers;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
@@ -56,8 +54,6 @@ import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 import org.mockito.Mockito;
 
-import java.io.Serializable;
-
 /**
  * Tests for {@link Window}.
  */
@@ -65,16 +61,20 @@ import java.io.Serializable;
 public class WindowTest implements Serializable {
 
   @Rule
+  public final transient TestPipeline pipeline = TestPipeline.create()
+                                                             .enableAbandonedNodeEnforcement(false);
+
+  @Rule
   public transient ExpectedException thrown = ExpectedException.none();
 
   @Test
   public void testWindowIntoSetWindowfn() {
-    WindowingStrategy<?, ?> strategy = TestPipeline.create()
+    WindowingStrategy<?, ?> strategy = pipeline
       .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
       .apply(Window.<String>into(FixedWindows.of(Duration.standardMinutes(10))))
       .getWindowingStrategy();
     assertTrue(strategy.getWindowFn() instanceof FixedWindows);
-    assertTrue(strategy.getTrigger().getSpec() instanceof DefaultTrigger);
+    assertTrue(strategy.getTrigger() instanceof DefaultTrigger);
     assertEquals(AccumulationMode.DISCARDING_FIRED_PANES, strategy.getMode());
   }
 
@@ -82,7 +82,7 @@ public class WindowTest implements Serializable {
   public void testWindowIntoTriggersAndAccumulating() {
     FixedWindows fixed10 = FixedWindows.of(Duration.standardMinutes(10));
     Repeatedly trigger = Repeatedly.forever(AfterPane.elementCountAtLeast(5));
-    WindowingStrategy<?, ?> strategy = TestPipeline.create()
+    WindowingStrategy<?, ?> strategy = pipeline
       .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
       .apply(Window.<String>into(fixed10)
           .triggering(trigger)
@@ -91,7 +91,7 @@ public class WindowTest implements Serializable {
       .getWindowingStrategy();
 
     assertEquals(fixed10, strategy.getWindowFn());
-    assertEquals(trigger, strategy.getTrigger().getSpec());
+    assertEquals(trigger, strategy.getTrigger());
     assertEquals(AccumulationMode.ACCUMULATING_FIRED_PANES, strategy.getMode());
   }
 
@@ -99,7 +99,7 @@ public class WindowTest implements Serializable {
   public void testWindowPropagatesEachPart() {
     FixedWindows fixed10 = FixedWindows.of(Duration.standardMinutes(10));
     Repeatedly trigger = Repeatedly.forever(AfterPane.elementCountAtLeast(5));
-    WindowingStrategy<?, ?> strategy = TestPipeline.create()
+    WindowingStrategy<?, ?> strategy = pipeline
       .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
       .apply("Mode", Window.<String>accumulatingFiredPanes())
       .apply("Lateness", Window.<String>withAllowedLateness(Duration.standardDays(1)))
@@ -108,22 +108,23 @@ public class WindowTest implements Serializable {
       .getWindowingStrategy();
 
     assertEquals(fixed10, strategy.getWindowFn());
-    assertEquals(trigger, strategy.getTrigger().getSpec());
+    assertEquals(trigger, strategy.getTrigger());
     assertEquals(AccumulationMode.ACCUMULATING_FIRED_PANES, strategy.getMode());
     assertEquals(Duration.standardDays(1), strategy.getAllowedLateness());
   }
 
   @Test
   public void testWindowIntoPropagatesLateness() {
+
     FixedWindows fixed10 = FixedWindows.of(Duration.standardMinutes(10));
     FixedWindows fixed25 = FixedWindows.of(Duration.standardMinutes(25));
-    WindowingStrategy<?, ?> strategy = TestPipeline.create()
+    WindowingStrategy<?, ?> strategy = pipeline
         .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
-        .apply(Window.named("WindowInto10").<String>into(fixed10)
+        .apply("WindowInto10", Window.<String>into(fixed10)
             .withAllowedLateness(Duration.standardDays(1))
             .triggering(Repeatedly.forever(AfterPane.elementCountAtLeast(5)))
             .accumulatingFiredPanes())
-        .apply(Window.named("WindowInto25").<String>into(fixed25))
+        .apply("WindowInto25", Window.<String>into(fixed25))
         .getWindowingStrategy();
 
     assertEquals(Duration.standardDays(1), strategy.getAllowedLateness());
@@ -160,7 +161,7 @@ public class WindowTest implements Serializable {
 
     thrown.expect(IllegalArgumentException.class);
     thrown.expectMessage("requires that the accumulation mode");
-    TestPipeline.create()
+    pipeline
       .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
       .apply("Window", Window.<String>into(fixed10))
       .apply("Lateness", Window.<String>withAllowedLateness(Duration.standardDays(1)))
@@ -174,7 +175,7 @@ public class WindowTest implements Serializable {
 
     thrown.expect(IllegalArgumentException.class);
     thrown.expectMessage("requires that the allowed lateness");
-    TestPipeline.create()
+    pipeline
       .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
       .apply("Mode", Window.<String>accumulatingFiredPanes())
       .apply("Window", Window.<String>into(fixed10))
@@ -188,7 +189,7 @@ public class WindowTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testOutputTimeFnDefault() {
-    Pipeline pipeline = TestPipeline.create();
+    pipeline.enableAbandonedNodeEnforcement(true);
 
     pipeline
         .apply(
@@ -200,7 +201,7 @@ public class WindowTest implements Serializable {
         .apply(
             ParDo.of(
                 new DoFn<KV<Integer, Iterable<String>>, Void>() {
-                  @Override
+                  @ProcessElement
                   public void processElement(ProcessContext c) throws Exception {
                     assertThat(
                         c.timestamp(),
@@ -222,7 +223,7 @@ public class WindowTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testOutputTimeFnEndOfWindow() {
-    Pipeline pipeline = TestPipeline.create();
+    pipeline.enableAbandonedNodeEnforcement(true);
 
     pipeline.apply(
         Create.timestamped(
@@ -232,7 +233,7 @@ public class WindowTest implements Serializable {
             .withOutputTimeFn(OutputTimeFns.outputAtEndOfWindow()))
         .apply(GroupByKey.<Integer, String>create())
         .apply(ParDo.of(new DoFn<KV<Integer, Iterable<String>>, Void>() {
-          @Override
+          @ProcessElement
           public void processElement(ProcessContext c) throws Exception {
             assertThat(c.timestamp(), equalTo(new Instant(10 * 60 * 1000 - 1)));
           }
@@ -259,7 +260,7 @@ public class WindowTest implements Serializable {
     DisplayData displayData = DisplayData.from(window);
 
     assertThat(displayData, hasDisplayItem("windowFn", windowFn.getClass()));
-    assertThat(displayData, includesDisplayDataFrom(windowFn));
+    assertThat(displayData, includesDisplayDataFor("windowFn", windowFn));
 
     assertThat(displayData, hasDisplayItem("trigger", triggerBuilder.toString()));
     assertThat(displayData,
@@ -272,24 +273,27 @@ public class WindowTest implements Serializable {
 
   @Test
   public void testDisplayDataExcludesUnspecifiedProperties() {
-    Window.Bound<?> window = Window.into(new GlobalWindows());
-
-    DisplayData displayData = DisplayData.from(window);
-    assertThat(displayData, not(hasDisplayItem(hasKey(isOneOf(
+    Window.Bound<?> onlyHasAccumulationMode = Window.discardingFiredPanes();
+    assertThat(DisplayData.from(onlyHasAccumulationMode), not(hasDisplayItem(hasKey(isOneOf(
+        "windowFn",
         "trigger",
         "outputTimeFn",
-        "accumulationMode",
         "allowedLateness",
         "closingBehavior")))));
 
+    Window.Bound<?> noAccumulationMode = Window.into(new GlobalWindows());
+    assertThat(DisplayData.from(noAccumulationMode),
+        not(hasDisplayItem(hasKey("accumulationMode"))));
   }
 
   @Test
-  public void testDisplayDataExcludesDefaultTrigger() {
+  public void testDisplayDataExcludesDefaults() {
     Window.Bound<?> window = Window.into(new GlobalWindows())
-        .triggering(DefaultTrigger.of());
+        .triggering(DefaultTrigger.of())
+        .withAllowedLateness(Duration.millis(BoundedWindow.TIMESTAMP_MAX_VALUE.getMillis()));
 
     DisplayData data = DisplayData.from(window);
-    assertThat(data, not(hasDisplayItem(hasKey("trigger"))));
+    assertThat(data, not(hasDisplayItem("trigger")));
+    assertThat(data, not(hasDisplayItem("allowedLateness")));
   }
 }

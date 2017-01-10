@@ -17,26 +17,24 @@
  */
 package org.apache.beam.sdk.coders;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static org.apache.beam.sdk.util.Structs.addList;
 import static org.apache.beam.sdk.util.Structs.addString;
 import static org.apache.beam.sdk.util.Structs.addStringList;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
-import org.apache.beam.sdk.util.CloudObject;
-import org.apache.beam.sdk.util.PropertyNames;
-import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
-
 import com.google.common.collect.Lists;
 import com.google.common.io.ByteStreams;
 import com.google.common.io.CountingOutputStream;
-
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import org.apache.beam.sdk.util.CloudObject;
+import org.apache.beam.sdk.util.PropertyNames;
+import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * An abstract base class to implement a {@link Coder} that defines equality, hashing, and printing
@@ -102,28 +100,45 @@ public abstract class StandardCoder<T> implements Coder<T> {
 
   @Override
   public String toString() {
+    StringBuilder builder = new StringBuilder();
     String s = getClass().getName();
-    s = s.substring(s.lastIndexOf('.') + 1);
+    builder.append(s.substring(s.lastIndexOf('.') + 1));
+
     List<? extends Coder<?>> componentCoders = getComponents();
     if (!componentCoders.isEmpty()) {
-      s += "(";
+      builder.append('(');
       boolean first = true;
       for (Coder<?> componentCoder : componentCoders) {
         if (first) {
           first = false;
         } else {
-          s += ", ";
+          builder.append(',');
         }
-        s += componentCoder.toString();
+        builder.append(componentCoder.toString());
       }
-      s += ")";
+      builder.append(')');
     }
-    return s;
+    return builder.toString();
   }
 
+  /**
+   * Adds the following properties to the {@link CloudObject} representation:
+   * <ul>
+   *   <li>component_encodings: A list of coders represented as {@link CloudObject}s
+   *       equivalent to the {@link #getCoderArguments}.</li>
+   *   <li>encoding_id: An identifier for the binary format written by {@link #encode}. See
+   *       {@link #getEncodingId} for further details.</li>
+   *   <li>allowed_encodings: A collection of encodings supported by {@link #decode} in
+   *       addition to the encoding from {@link #getEncodingId()} (which is assumed supported).
+   *       See {@link #getAllowedEncodings} for further details.</li>
+   * </ul>
+   *
+   * <p>{@link StandardCoder} implementations should override {@link #initializeCloudObject}
+   * to customize the {@link CloudObject} representation.
+   */
   @Override
-  public CloudObject asCloudObject() {
-    CloudObject result = CloudObject.forClass(getClass());
+  public final CloudObject asCloudObject() {
+    CloudObject result = initializeCloudObject();
 
     List<? extends Coder<?>> components = getComponents();
     if (!components.isEmpty()) {
@@ -146,6 +161,18 @@ public abstract class StandardCoder<T> implements Coder<T> {
     }
 
     return result;
+  }
+
+  /**
+   * Subclasses should override this method to customize the {@link CloudObject}
+   * representation. {@link StandardCoder#asCloudObject} delegates to this method
+   * to provide an initial {@link CloudObject}.
+   *
+   * <p>The default implementation returns a {@link CloudObject} using
+   * {@link Object#getClass} for the type.
+   */
+  protected CloudObject initializeCloudObject() {
+    return CloudObject.forClass(getClass());
   }
 
   /**
@@ -228,5 +255,12 @@ public abstract class StandardCoder<T> implements Coder<T> {
             "Unable to encode element '" + value + "' with coder '" + this + "'.", exn);
       }
     }
+  }
+
+  @SuppressWarnings("unchecked")
+  @Override
+  public TypeDescriptor<T> getEncodedTypeDescriptor() {
+    return (TypeDescriptor<T>)
+        TypeDescriptor.of(getClass()).resolveType(new TypeDescriptor<T>() {}.getType());
   }
 }

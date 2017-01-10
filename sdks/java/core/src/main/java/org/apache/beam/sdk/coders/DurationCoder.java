@@ -17,16 +17,14 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
-
-import org.joda.time.Duration;
-import org.joda.time.ReadableDuration;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.joda.time.Duration;
+import org.joda.time.ReadableDuration;
 
 /**
  * A {@link Coder} that encodes a joda {@link Duration} as a {@link Long} using the format of
@@ -42,6 +40,8 @@ public class DurationCoder extends AtomicCoder<ReadableDuration> {
   /////////////////////////////////////////////////////////////////////////////
 
   private static final DurationCoder INSTANCE = new DurationCoder();
+  private static final TypeDescriptor<ReadableDuration> TYPE_DESCRIPTOR =
+      new TypeDescriptor<ReadableDuration>() {};
 
   private final VarLongCoder longCoder = VarLongCoder.of();
 
@@ -94,5 +94,10 @@ public class DurationCoder extends AtomicCoder<ReadableDuration> {
   public void registerByteSizeObserver(
       ReadableDuration value, ElementByteSizeObserver observer, Context context) throws Exception {
     longCoder.registerByteSizeObserver(toLong(value), observer, context);
+  }
+
+  @Override
+  public TypeDescriptor<ReadableDuration> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 }

@@ -21,10 +21,16 @@ import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisp
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.display.DisplayData;
@@ -33,24 +39,21 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.transforms.windowing.Window.Bound;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
 import org.hamcrest.Matchers;
 import org.joda.time.Duration;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.io.Serializable;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-
 /** Tests for Top. */
 @RunWith(JUnit4.class)
 public class TopTest {
+
+  @Rule
+  public final TestPipeline p = TestPipeline.create();
 
   @Rule
   public ExpectedException expectedEx = ExpectedException.none();
@@ -90,9 +93,9 @@ public class TopTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   @SuppressWarnings("unchecked")
   public void testTop() {
-    Pipeline p = TestPipeline.create();
     PCollection<String> input =
         p.apply(Create.of(Arrays.asList(COLLECTION))
                  .withCoder(StringUtf8Coder.of()));
@@ -121,9 +124,9 @@ public class TopTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   @SuppressWarnings("unchecked")
   public void testTopEmpty() {
-    Pipeline p = TestPipeline.create();
     PCollection<String> input =
         p.apply(Create.of(Arrays.asList(EMPTY_COLLECTION))
                  .withCoder(StringUtf8Coder.of()));
@@ -149,7 +152,8 @@ public class TopTest {
 
   @Test
   public void testTopEmptyWithIncompatibleWindows() {
-    Pipeline p = TestPipeline.create();
+    p.enableAbandonedNodeEnforcement(false);
+
     Bound<String> windowingFn = Window.<String>into(FixedWindows.of(Duration.standardDays(10L)));
     PCollection<String> input =
         p.apply(Create.timestamped(Collections.<String>emptyList(), Collections.<Long>emptyList()))
@@ -165,9 +169,9 @@ public class TopTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   @SuppressWarnings("unchecked")
   public void testTopZero() {
-    Pipeline p = TestPipeline.create();
     PCollection<String> input =
         p.apply(Create.of(Arrays.asList(COLLECTION))
                  .withCoder(StringUtf8Coder.of()));
@@ -199,7 +203,8 @@ public class TopTest {
   // This is a purely compile-time test.  If the code compiles, then it worked.
   @Test
   public void testPerKeySerializabilityRequirement() {
-    Pipeline p = TestPipeline.create();
+    p.enableAbandonedNodeEnforcement(false);
+
     p.apply("CreateCollection", Create.of(Arrays.asList(COLLECTION))
         .withCoder(StringUtf8Coder.of()));
 
@@ -215,7 +220,8 @@ public class TopTest {
 
   @Test
   public void testCountConstraint() {
-    Pipeline p = TestPipeline.create();
+    p.enableAbandonedNodeEnforcement(false);
+
     PCollection<String> input =
         p.apply(Create.of(Arrays.asList(COLLECTION))
             .withCoder(StringUtf8Coder.of()));
@@ -228,12 +234,13 @@ public class TopTest {
 
   @Test
   public void testTopGetNames() {
-    assertEquals("Top.Globally", Top.of(1, new OrderByLength()).getName());
-    assertEquals("Smallest.Globally", Top.smallest(1).getName());
-    assertEquals("Largest.Globally", Top.largest(2).getName());
-    assertEquals("Top.PerKey", Top.perKey(1, new IntegerComparator()).getName());
-    assertEquals("Smallest.PerKey", Top.<String, Integer>smallestPerKey(1).getName());
-    assertEquals("Largest.PerKey", Top.<String, Integer>largestPerKey(2).getName());
+    assertEquals("Combine.globally(Top(OrderByLength))", Top.of(1, new OrderByLength()).getName());
+    assertEquals("Combine.globally(Top(Smallest))", Top.smallest(1).getName());
+    assertEquals("Combine.globally(Top(Largest))", Top.largest(2).getName());
+    assertEquals("Combine.perKey(Top(IntegerComparator))",
+        Top.perKey(1, new IntegerComparator()).getName());
+    assertEquals("Combine.perKey(Top(Smallest))", Top.<String, Integer>smallestPerKey(1).getName());
+    assertEquals("Combine.perKey(Top(Largest))", Top.<String, Integer>largestPerKey(2).getName());
   }
 
   @Test

@@ -23,19 +23,25 @@ import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.Coder.Context;
-import org.apache.beam.sdk.coders.Coder.NonDeterministicException;
-import org.apache.beam.sdk.testing.CoderProperties;
-import org.apache.beam.sdk.testing.PAssert;
-import org.apache.beam.sdk.testing.TestPipeline;
-import org.apache.beam.sdk.transforms.Create;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.util.CloudObject;
-import org.apache.beam.sdk.util.SerializableUtils;
-import org.apache.beam.sdk.values.PCollection;
-
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import org.apache.avro.AvroTypeException;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
@@ -49,29 +55,30 @@ import org.apache.avro.reflect.Stringable;
 import org.apache.avro.reflect.Union;
 import org.apache.avro.specific.SpecificData;
 import org.apache.avro.util.Utf8;
+import org.apache.beam.sdk.coders.Coder.Context;
+import org.apache.beam.sdk.coders.Coder.NonDeterministicException;
+import org.apache.beam.sdk.testing.CoderProperties;
+import org.apache.beam.sdk.testing.NeedsRunner;
+import org.apache.beam.sdk.testing.PAssert;
+import org.apache.beam.sdk.testing.TestPipeline;
+import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.util.CloudObject;
+import org.apache.beam.sdk.util.SerializableUtils;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.TypeDescriptor;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
 import org.hamcrest.TypeSafeMatcher;
 import org.junit.Assert;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.SortedMap;
-import java.util.SortedSet;
-import java.util.TreeMap;
-import java.util.TreeSet;
+import org.objenesis.strategy.StdInstantiatorStrategy;
 
 /** Tests for {@link AvroCoder}. */
 @RunWith(JUnit4.class)
@@ -131,11 +138,14 @@ public class AvroCoderTest {
   }
 
   private static class GetTextFn extends DoFn<Pojo, String> {
-    @Override
+    @ProcessElement
     public void processElement(ProcessContext c) {
       c.output(c.element().text);
     }
   }
+
+  @Rule
+  public TestPipeline pipeline = TestPipeline.create();
 
   @Test
   public void testAvroCoderEncoding() throws Exception {
@@ -144,6 +154,74 @@ public class AvroCoderTest {
 
     Assert.assertThat(encoding.keySet(),
         Matchers.containsInAnyOrder("@type", "type", "schema", "encoding_id"));
+  }
+
+  /**
+   * Confirm that we can serialize and deserialize an AvroCoder object and still decode after.
+   * (BEAM-349).
+   *
+   * @throws Exception
+   */
+  @Test
+  public void testTransientFieldInitialization() throws Exception {
+    Pojo value = new Pojo("Hello", 42);
+    AvroCoder<Pojo> coder = AvroCoder.of(Pojo.class);
+
+    //Serialization of object
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    ObjectOutputStream out = new ObjectOutputStream(bos);
+    out.writeObject(coder);
+
+    //De-serialization of object
+    ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
+    ObjectInputStream in = new ObjectInputStream(bis);
+    AvroCoder<Pojo> copied = (AvroCoder<Pojo>) in.readObject();
+
+    CoderProperties.coderDecodeEncodeEqual(copied, value);
+  }
+
+  /**
+   * Confirm that we can serialize and deserialize an AvroCoder object using Kryo.
+   * (BEAM-626).
+   *
+   * @throws Exception
+   */
+  @Test
+  public void testKryoSerialization() throws Exception {
+    Pojo value = new Pojo("Hello", 42);
+    AvroCoder<Pojo> coder = AvroCoder.of(Pojo.class);
+
+    //Kryo instantiation
+    Kryo kryo = new Kryo();
+    kryo.setInstantiatorStrategy(new StdInstantiatorStrategy());
+
+    //Serialization of object without any memoization
+    ByteArrayOutputStream coderWithoutMemoizationBos = new ByteArrayOutputStream();
+    try (Output output = new Output(coderWithoutMemoizationBos)) {
+      kryo.writeObject(output, coder);
+    }
+
+    // Force thread local memoization to store values.
+    CoderProperties.coderDecodeEncodeEqual(coder, value);
+
+    // Serialization of object with memoized fields
+    ByteArrayOutputStream coderWithMemoizationBos = new ByteArrayOutputStream();
+    try (Output output = new Output(coderWithMemoizationBos)) {
+      kryo.writeObject(output, coder);
+    }
+
+    // Copy empty and memoized variants of the Coder
+    ByteArrayInputStream bisWithoutMemoization =
+        new ByteArrayInputStream(coderWithoutMemoizationBos.toByteArray());
+    AvroCoder<Pojo> copiedWithoutMemoization =
+        (AvroCoder<Pojo>) kryo.readObject(new Input(bisWithoutMemoization), AvroCoder.class);
+    ByteArrayInputStream bisWithMemoization =
+        new ByteArrayInputStream(coderWithMemoizationBos.toByteArray());
+    AvroCoder<Pojo> copiedWithMemoization =
+        (AvroCoder<Pojo>) kryo.readObject(new Input(bisWithMemoization), AvroCoder.class);
+
+    CoderProperties.coderDecodeEncodeEqual(copiedWithoutMemoization, value);
+    CoderProperties.coderDecodeEncodeEqual(copiedWithMemoization, value);
   }
 
   @Test
@@ -211,18 +289,17 @@ public class AvroCoderTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testDefaultCoder() throws Exception {
-    Pipeline p = TestPipeline.create();
-
     // Use MyRecord as input and output types without explicitly specifying
     // a coder (this uses the default coders, which may not be AvroCoder).
     PCollection<String> output =
-        p.apply(Create.of(new Pojo("hello", 1), new Pojo("world", 2)))
+        pipeline.apply(Create.of(new Pojo("hello", 1), new Pojo("world", 2)))
             .apply(ParDo.of(new GetTextFn()));
 
     PAssert.that(output)
         .containsInAnyOrder("hello", "world");
-    p.run();
+    pipeline.run();
   }
 
   @Test
@@ -233,7 +310,7 @@ public class AvroCoderTest {
     SerializableUtils.ensureSerializable(coder);
   }
 
-  private final void assertDeterministic(AvroCoder<?> coder) {
+  private void assertDeterministic(AvroCoder<?> coder) {
     try {
       coder.verifyDeterministic();
     } catch (NonDeterministicException e) {
@@ -241,7 +318,7 @@ public class AvroCoderTest {
     }
   }
 
-  private final void assertNonDeterministic(AvroCoder<?> coder,
+  private void assertNonDeterministic(AvroCoder<?> coder,
       Matcher<String> reason1) {
     try {
       coder.verifyDeterministic();
@@ -751,5 +828,37 @@ public class AvroCoderTest {
     public int hashCode() {
       return Objects.hash(getClass(), onlySomeTypesAllowed);
     }
+  }
+
+  @Test
+  public void testAvroCoderForGenerics() throws Exception {
+    Schema fooSchema = AvroCoder.of(Foo.class).getSchema();
+    Schema schema = new Schema.Parser().parse("{"
+        + "\"type\":\"record\","
+        + "\"name\":\"SomeGeneric\","
+        + "\"namespace\":\"ns\","
+        + "\"fields\":["
+        + "  {\"name\":\"foo\", \"type\":" + fooSchema.toString() + "}"
+        + "]}");
+    @SuppressWarnings("rawtypes")
+    AvroCoder<SomeGeneric> coder = AvroCoder.of(SomeGeneric.class, schema);
+
+    assertNonDeterministic(coder,
+        reasonField(SomeGeneric.class, "foo", "erasure"));
+  }
+
+  @Test
+  public void testEncodedTypeDescriptor() throws Exception {
+    AvroCoder<Pojo> coder = AvroCoder.of(Pojo.class);
+    assertThat(coder.getEncodedTypeDescriptor(), equalTo(TypeDescriptor.of(Pojo.class)));
+  }
+
+  private static class SomeGeneric<T> {
+    @SuppressWarnings("unused")
+    private T foo;
+  }
+  private static class Foo {
+    @SuppressWarnings("unused")
+    String id;
   }
 }

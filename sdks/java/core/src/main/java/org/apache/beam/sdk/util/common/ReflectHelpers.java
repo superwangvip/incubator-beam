@@ -17,15 +17,16 @@
  */
 package org.apache.beam.sdk.util.common;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Arrays.asList;
 
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Queues;
-
+import java.lang.annotation.Annotation;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
@@ -33,10 +34,10 @@ import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
+import java.util.Comparator;
 import java.util.Queue;
-
+import java.util.ServiceLoader;
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 /**
@@ -49,7 +50,7 @@ public class ReflectHelpers {
   /** A {@link Function} that turns a method into a simple method signature. */
   public static final Function<Method, String> METHOD_FORMATTER = new Function<Method, String>() {
     @Override
-    public String apply(Method input) {
+    public String apply(@Nonnull Method input) {
       String parameterTypes = FluentIterable.from(asList(input.getParameterTypes()))
           .transform(CLASS_SIMPLE_NAME)
           .join(COMMA_SEPARATOR);
@@ -63,7 +64,7 @@ public class ReflectHelpers {
   public static final Function<Method, String> CLASS_AND_METHOD_FORMATTER =
       new Function<Method, String>() {
     @Override
-    public String apply(Method input) {
+    public String apply(@Nonnull Method input) {
       return String.format("%s#%s",
           CLASS_NAME.apply(input.getDeclaringClass()),
           METHOD_FORMATTER.apply(input));
@@ -74,7 +75,7 @@ public class ReflectHelpers {
   public static final Function<Class<?>, String> CLASS_NAME =
       new Function<Class<?>, String>() {
     @Override
-    public String apply(Class<?> input) {
+    public String apply(@Nonnull Class<?> input) {
       return input.getName();
     }
   };
@@ -83,17 +84,33 @@ public class ReflectHelpers {
   public static final Function<Class<?>, String> CLASS_SIMPLE_NAME =
       new Function<Class<?>, String>() {
     @Override
-    public String apply(Class<?> input) {
+    public String apply(@Nonnull Class<?> input) {
       return input.getSimpleName();
     }
   };
+
+  /**
+   * A {@link Function} that returns a concise string for a {@link Annotation}.
+   */
+  public static final Function<Annotation, String> ANNOTATION_FORMATTER =
+      new Function<Annotation, String>() {
+        @Override
+        public String apply(@Nonnull Annotation annotation) {
+          String annotationName = annotation.annotationType().getName();
+          String annotationNameWithoutPackage =
+              annotationName.substring(annotationName.lastIndexOf('.') + 1).replace('$', '.');
+          String annotationToString = annotation.toString();
+          String values = annotationToString.substring(annotationToString.indexOf('('));
+          return String.format("%s%s", annotationNameWithoutPackage, values);
+        }
+      };
 
   /** A {@link Function} that formats types. */
   public static final Function<Type, String> TYPE_SIMPLE_DESCRIPTION =
       new Function<Type, String>() {
     @Override
     @Nullable
-    public String apply(@Nullable Type input) {
+    public String apply(@Nonnull Type input) {
       StringBuilder builder = new StringBuilder();
       format(builder, input);
       return builder.toString();
@@ -152,24 +169,13 @@ public class ReflectHelpers {
     }
   };
 
-  /**
-   * Returns all interfaces of the given clazz.
-   * @param clazz
-   * @return
-   */
-  public static FluentIterable<Class<?>> getClosureOfInterfaces(Class<?> clazz) {
-    Preconditions.checkNotNull(clazz);
-    Queue<Class<?>> interfacesToProcess = Queues.newArrayDeque();
-    Collections.addAll(interfacesToProcess, clazz.getInterfaces());
-
-    LinkedHashSet<Class<?>> interfaces = new LinkedHashSet<>();
-    while (!interfacesToProcess.isEmpty()) {
-      Class<?> current = interfacesToProcess.remove();
-      if (interfaces.add(current)) {
-        Collections.addAll(interfacesToProcess, current.getInterfaces());
-      }
+  /** A {@link Comparator} that uses the object's classes canonical name to compare them. */
+  public static class ObjectsClassComparator implements Comparator<Object> {
+    public static final ObjectsClassComparator INSTANCE = new ObjectsClassComparator();
+    @Override
+    public int compare(Object o1, Object o2) {
+      return o1.getClass().getCanonicalName().compareTo(o2.getClass().getCanonicalName());
     }
-    return FluentIterable.from(interfaces);
   }
 
   /**
@@ -183,7 +189,7 @@ public class ReflectHelpers {
     return FluentIterable.from(interfaces).transformAndConcat(
         new Function<Class<?>, Iterable<Method>>() {
           @Override
-          public Iterable<Method> apply(Class<?> input) {
+          public Iterable<Method> apply(@Nonnull Class<?> input) {
             return getClosureOfMethodsOnInterface(input);
           }
     });
@@ -196,8 +202,8 @@ public class ReflectHelpers {
    * @return An iterable of {@link Method}s which {@code iface} exposes.
    */
   public static Iterable<Method> getClosureOfMethodsOnInterface(Class<?> iface) {
-    Preconditions.checkNotNull(iface);
-    Preconditions.checkArgument(iface.isInterface());
+    checkNotNull(iface);
+    checkArgument(iface.isInterface());
     ImmutableSet.Builder<Method> builder = ImmutableSet.builder();
     Queue<Class<?>> interfacesToProcess = Queues.newArrayDeque();
     interfacesToProcess.add(iface);
@@ -207,5 +213,22 @@ public class ReflectHelpers {
       interfacesToProcess.addAll(Arrays.asList(current.getInterfaces()));
     }
     return builder.build();
+  }
+
+  /**
+   * Finds the appropriate {@code ClassLoader} to be used by the
+   * {@link ServiceLoader#load} call, which by default would use the context
+   * {@code ClassLoader}, which can be null. The fallback is as follows: context
+   * ClassLoader, class ClassLoader and finaly the system ClassLoader.
+   */
+  public static ClassLoader findClassLoader() {
+    ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+    if (classLoader == null) {
+      classLoader = ReflectHelpers.class.getClassLoader();
+    }
+    if (classLoader == null) {
+      classLoader = ClassLoader.getSystemClassLoader();
+    }
+    return classLoader;
   }
 }

@@ -17,46 +17,42 @@
  */
 package org.apache.beam.runners.dataflow;
 
-import org.apache.beam.runners.dataflow.options.BlockingDataflowPipelineOptions;
+import com.google.auto.service.AutoService;
+import com.google.common.collect.ImmutableList;
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsRegistrar;
 import org.apache.beam.sdk.runners.PipelineRunner;
 import org.apache.beam.sdk.runners.PipelineRunnerRegistrar;
 
-import com.google.auto.service.AutoService;
-import com.google.common.collect.ImmutableList;
-
 /**
  * Contains the {@link PipelineOptionsRegistrar} and {@link PipelineRunnerRegistrar} for the
- * {@link DataflowPipelineRunner}.
+ * {@link DataflowRunner}.
  */
 public class DataflowPipelineRegistrar {
   private DataflowPipelineRegistrar() { }
 
   /**
-   * Register the {@link DataflowPipelineOptions} and {@link BlockingDataflowPipelineOptions}.
+   * Register the {@link DataflowPipelineOptions}.
    */
   @AutoService(PipelineOptionsRegistrar.class)
   public static class Options implements PipelineOptionsRegistrar {
     @Override
     public Iterable<Class<? extends PipelineOptions>> getPipelineOptions() {
       return ImmutableList.<Class<? extends PipelineOptions>>of(
-          DataflowPipelineOptions.class,
-          BlockingDataflowPipelineOptions.class);
+          DataflowPipelineOptions.class);
     }
   }
 
   /**
-   * Register the {@link DataflowPipelineRunner} and {@link BlockingDataflowPipelineRunner}.
+   * Register the {@link DataflowRunner}.
    */
   @AutoService(PipelineRunnerRegistrar.class)
   public static class Runner implements PipelineRunnerRegistrar {
     @Override
     public Iterable<Class<? extends PipelineRunner<?>>> getPipelineRunners() {
       return ImmutableList.<Class<? extends PipelineRunner<?>>>of(
-          DataflowPipelineRunner.class,
-          BlockingDataflowPipelineRunner.class);
+          DataflowRunner.class);
     }
   }
 }

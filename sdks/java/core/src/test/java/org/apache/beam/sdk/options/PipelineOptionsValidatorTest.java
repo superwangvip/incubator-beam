@@ -17,6 +17,7 @@
  */
 package org.apache.beam.sdk.options;
 
+import org.apache.beam.sdk.testing.CrashingRunner;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
@@ -30,7 +31,7 @@ public class PipelineOptionsValidatorTest {
   public ExpectedException expectedException = ExpectedException.none();
 
   /** A test interface with an {@link Validation.Required} annotation. */
-  public static interface Required extends PipelineOptions {
+  public interface Required extends PipelineOptions {
     @Validation.Required
     @Description("Fake Description")
     String getObject();
@@ -40,6 +41,7 @@ public class PipelineOptionsValidatorTest {
   @Test
   public void testWhenRequiredOptionIsSet() {
     Required required = PipelineOptionsFactory.as(Required.class);
+    required.setRunner(CrashingRunner.class);
     required.setObject("blah");
     PipelineOptionsValidator.validate(Required.class, required);
   }
@@ -80,7 +82,7 @@ public class PipelineOptionsValidatorTest {
   }
 
   /** A test interface that overrides the parent's method. */
-  public static interface SubClassValidation extends Required {
+  public interface SubClassValidation extends Required {
     @Override
     String getObject();
     @Override
@@ -99,7 +101,7 @@ public class PipelineOptionsValidatorTest {
   }
 
   /** A test interface with a required group. */
-  public static interface GroupRequired extends PipelineOptions {
+  public interface GroupRequired extends PipelineOptions {
     @Validation.Required(groups = {"ham"})
     String getFoo();
     void setFoo(String foo);
@@ -114,6 +116,7 @@ public class PipelineOptionsValidatorTest {
     GroupRequired groupRequired = PipelineOptionsFactory.as(GroupRequired.class);
     groupRequired.setFoo("foo");
     groupRequired.setBar(null);
+    groupRequired.setRunner(CrashingRunner.class);
 
     PipelineOptionsValidator.validate(GroupRequired.class, groupRequired);
 
@@ -126,6 +129,7 @@ public class PipelineOptionsValidatorTest {
   @Test
   public void testWhenNoneOfRequiredGroupIsSetThrowsException() {
     GroupRequired groupRequired = PipelineOptionsFactory.as(GroupRequired.class);
+    groupRequired.setRunner(CrashingRunner.class);
 
     expectedException.expect(IllegalArgumentException.class);
     expectedException.expectMessage("Missing required value for group [ham]");
@@ -137,7 +141,7 @@ public class PipelineOptionsValidatorTest {
   }
 
   /** A test interface with a member in multiple required groups. */
-  public static interface MultiGroupRequired extends PipelineOptions {
+  public interface MultiGroupRequired extends PipelineOptions {
     @Validation.Required(groups = {"spam", "ham"})
     String getFoo();
     void setFoo(String foo);
@@ -155,12 +159,13 @@ public class PipelineOptionsValidatorTest {
   public void testWhenOneOfMultipleRequiredGroupsIsSetIsValid() {
     MultiGroupRequired multiGroupRequired = PipelineOptionsFactory.as(MultiGroupRequired.class);
 
+    multiGroupRequired.setRunner(CrashingRunner.class);
     multiGroupRequired.setFoo("eggs");
 
     PipelineOptionsValidator.validate(MultiGroupRequired.class, multiGroupRequired);
   }
 
-  private static interface LeftOptions extends PipelineOptions {
+  private interface LeftOptions extends PipelineOptions {
     @Validation.Required(groups = {"left"})
     String getFoo();
     void setFoo(String foo);
@@ -174,7 +179,7 @@ public class PipelineOptionsValidatorTest {
     void setBoth(String both);
   }
 
-  private static interface RightOptions extends PipelineOptions {
+  private interface RightOptions extends PipelineOptions {
     @Validation.Required(groups = {"right"})
     String getFoo();
     void setFoo(String foo);
@@ -188,12 +193,13 @@ public class PipelineOptionsValidatorTest {
     void setBoth(String both);
   }
 
-  private static interface JoinedOptions extends LeftOptions, RightOptions {}
+  private interface JoinedOptions extends LeftOptions, RightOptions {}
 
   @Test
   public void testWhenOptionIsDefinedInMultipleSuperInterfacesAndIsNotPresentFailsRequirement() {
     RightOptions rightOptions = PipelineOptionsFactory.as(RightOptions.class);
     rightOptions.setBoth("foo");
+    rightOptions.setRunner(CrashingRunner.class);
 
     expectedException.expect(IllegalArgumentException.class);
     expectedException.expectMessage("Missing required value for group");
@@ -212,6 +218,8 @@ public class PipelineOptionsValidatorTest {
     leftOpts.setFoo("Untrue");
     leftOpts.setBoth("Raise the");
 
+    rightOpts.setRunner(CrashingRunner.class);
+    leftOpts.setRunner(CrashingRunner.class);
     PipelineOptionsValidator.validate(JoinedOptions.class, rightOpts);
     PipelineOptionsValidator.validate(JoinedOptions.class, leftOpts);
   }
@@ -226,6 +234,8 @@ public class PipelineOptionsValidatorTest {
     leftOpts.setFoo("Untrue");
     leftOpts.setBoth("Raise the");
 
+    rightOpts.setRunner(CrashingRunner.class);
+    leftOpts.setRunner(CrashingRunner.class);
     PipelineOptionsValidator.validate(RightOptions.class, leftOpts);
     PipelineOptionsValidator.validate(LeftOptions.class, rightOpts);
   }
@@ -234,6 +244,7 @@ public class PipelineOptionsValidatorTest {
   public void testWhenOptionIsDefinedOnMultipleInterfacesOnlyListedOnceWhenNotPresent() {
     JoinedOptions options = PipelineOptionsFactory.as(JoinedOptions.class);
     options.setFoo("Hello");
+    options.setRunner(CrashingRunner.class);
 
     expectedException.expect(IllegalArgumentException.class);
     expectedException.expectMessage("required value for group [both]");
@@ -242,7 +253,7 @@ public class PipelineOptionsValidatorTest {
     PipelineOptionsValidator.validate(JoinedOptions.class, options);
   }
 
-  private static interface SuperOptions extends PipelineOptions {
+  private interface SuperOptions extends PipelineOptions {
     @Validation.Required(groups = {"super"})
     String getFoo();
     void setFoo(String foo);
@@ -256,7 +267,7 @@ public class PipelineOptionsValidatorTest {
     void setSuperclassObj(String sup);
   }
 
-  private static interface SubOptions extends SuperOptions {
+  private interface SubOptions extends SuperOptions {
     @Override
     @Validation.Required(groups = {"sub"})
     String getFoo();
@@ -273,6 +284,7 @@ public class PipelineOptionsValidatorTest {
   public void testSuperInterfaceRequiredOptionsAlsoRequiredInSubInterface() {
     SubOptions subOpts = PipelineOptionsFactory.as(SubOptions.class);
     subOpts.setFoo("Bar");
+    subOpts.setRunner(CrashingRunner.class);
 
     expectedException.expect(IllegalArgumentException.class);
     expectedException.expectMessage("otherSuper");
@@ -288,6 +300,7 @@ public class PipelineOptionsValidatorTest {
     SubOptions opts = PipelineOptionsFactory.as(SubOptions.class);
     opts.setFoo("Foo");
     opts.setSuperclassObj("Hello world");
+    opts.setRunner(CrashingRunner.class);
 
     // Valid SubOptions, but invalid SuperOptions
     PipelineOptionsValidator.validate(SubOptions.class, opts);
@@ -304,6 +317,7 @@ public class PipelineOptionsValidatorTest {
     subOpts.setFoo("bar");
     subOpts.setBar("bar");
     subOpts.setSuperclassObj("SuperDuper");
+    subOpts.setRunner(CrashingRunner.class);
 
     PipelineOptionsValidator.validate(SubOptions.class, subOpts);
     PipelineOptionsValidator.validate(SuperOptions.class, subOpts);

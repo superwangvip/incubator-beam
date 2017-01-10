@@ -18,21 +18,19 @@
 package org.apache.beam.sdk.transforms;
 
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
-
 import static org.hamcrest.MatcherAssert.assertThat;
 
+import java.io.Serializable;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.values.PCollection;
-
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
 
 /**
  * Tests for {@link Filter}.
@@ -60,12 +58,12 @@ public class FilterTest implements Serializable {
     }
   }
 
-  @Deprecated
+  @Rule
+  public final TestPipeline p = TestPipeline.create();
+
   @Test
   @Category(RunnableOnService.class)
-  public void testIdentityFilterBy() {
-    TestPipeline p = TestPipeline.create();
-
+  public void testIdentityFilterByPredicate() {
     PCollection<Integer> output = p
         .apply(Create.of(591, 11789, 1257, 24578, 24799, 307))
         .apply(Filter.by(new TrivialFn(true)));
@@ -74,11 +72,9 @@ public class FilterTest implements Serializable {
     p.run();
   }
 
-  @Deprecated
   @Test
-  public void testNoFilter() {
-    TestPipeline p = TestPipeline.create();
-
+  @Category(RunnableOnService.class)
+  public void testNoFilterByPredicate() {
     PCollection<Integer> output = p
         .apply(Create.of(1, 2, 4, 5))
         .apply(Filter.by(new TrivialFn(false)));
@@ -87,12 +83,9 @@ public class FilterTest implements Serializable {
     p.run();
   }
 
-  @Deprecated
   @Test
   @Category(RunnableOnService.class)
-  public void testFilterBy() {
-    TestPipeline p = TestPipeline.create();
-
+  public void testFilterByPredicate() {
     PCollection<Integer> output = p
         .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
         .apply(Filter.by(new EvenFn()));
@@ -103,47 +96,7 @@ public class FilterTest implements Serializable {
 
   @Test
   @Category(RunnableOnService.class)
-  public void testIdentityFilterByPredicate() {
-    TestPipeline p = TestPipeline.create();
-
-    PCollection<Integer> output = p
-        .apply(Create.of(591, 11789, 1257, 24578, 24799, 307))
-        .apply(Filter.byPredicate(new TrivialFn(true)));
-
-    PAssert.that(output).containsInAnyOrder(591, 11789, 1257, 24578, 24799, 307);
-    p.run();
-  }
-
-  @Test
-  public void testNoFilterByPredicate() {
-    TestPipeline p = TestPipeline.create();
-
-    PCollection<Integer> output = p
-        .apply(Create.of(1, 2, 4, 5))
-        .apply(Filter.byPredicate(new TrivialFn(false)));
-
-    PAssert.that(output).empty();
-    p.run();
-  }
-
-  @Test
-  @Category(RunnableOnService.class)
-  public void testFilterByPredicate() {
-    TestPipeline p = TestPipeline.create();
-
-    PCollection<Integer> output = p
-        .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
-        .apply(Filter.byPredicate(new EvenFn()));
-
-    PAssert.that(output).containsInAnyOrder(2, 4, 6);
-    p.run();
-  }
-
-  @Test
-  @Category(RunnableOnService.class)
   public void testFilterLessThan() {
-    TestPipeline p = TestPipeline.create();
-
     PCollection<Integer> output = p
         .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
         .apply(Filter.lessThan(4));
@@ -153,9 +106,8 @@ public class FilterTest implements Serializable {
   }
 
   @Test
+  @Category(RunnableOnService.class)
   public void testFilterGreaterThan() {
-    TestPipeline p = TestPipeline.create();
-
     PCollection<Integer> output = p
         .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
         .apply(Filter.greaterThan(4));
@@ -165,17 +117,35 @@ public class FilterTest implements Serializable {
   }
 
   @Test
+  @Category(RunnableOnService.class)
+  public void testFilterLessThanEq() {
+    PCollection<Integer> output = p
+        .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
+        .apply(Filter.lessThanEq(4));
+
+    PAssert.that(output).containsInAnyOrder(1, 2, 3, 4);
+    p.run();
+  }
+
+  @Test
+  @Category(RunnableOnService.class)
+  public void testFilterGreaterThanEq() {
+    PCollection<Integer> output = p
+        .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
+        .apply(Filter.greaterThanEq(4));
+
+    PAssert.that(output).containsInAnyOrder(4, 5, 6, 7);
+    p.run();
+  }
+
+  @Test
   public void testDisplayData() {
-    ParDo.Bound<Integer, Integer> lessThan = Filter.lessThan(123);
-    assertThat(DisplayData.from(lessThan), hasDisplayItem("predicate", "x < 123"));
+    assertThat(DisplayData.from(Filter.lessThan(123)), hasDisplayItem("predicate", "x < 123"));
 
-    ParDo.Bound<Integer, Integer> lessThanOrEqual = Filter.lessThanEq(234);
-    assertThat(DisplayData.from(lessThanOrEqual), hasDisplayItem("predicate", "x ≤ 234"));
+    assertThat(DisplayData.from(Filter.lessThanEq(234)), hasDisplayItem("predicate", "x ≤ 234"));
 
-    ParDo.Bound<Integer, Integer> greaterThan = Filter.greaterThan(345);
-    assertThat(DisplayData.from(greaterThan), hasDisplayItem("predicate", "x > 345"));
+    assertThat(DisplayData.from(Filter.greaterThan(345)), hasDisplayItem("predicate", "x > 345"));
 
-    ParDo.Bound<Integer, Integer> greaterThanOrEqual = Filter.greaterThanEq(456);
-    assertThat(DisplayData.from(greaterThanOrEqual), hasDisplayItem("predicate", "x ≥ 456"));
+    assertThat(DisplayData.from(Filter.greaterThanEq(456)), hasDisplayItem("predicate", "x ≥ 456"));
   }
 }

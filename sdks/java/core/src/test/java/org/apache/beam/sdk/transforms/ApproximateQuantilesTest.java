@@ -18,35 +18,35 @@
 package org.apache.beam.sdk.transforms;
 
 import static org.apache.beam.sdk.TestUtils.checkCombineFn;
-
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.collection.IsIterableContainingInOrder.contains;
-
-import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
-import org.apache.beam.sdk.coders.KvCoder;
-import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.testing.PAssert;
-import org.apache.beam.sdk.testing.TestPipeline;
-import org.apache.beam.sdk.transforms.ApproximateQuantiles.ApproximateQuantilesCombineFn;
-import org.apache.beam.sdk.transforms.display.DisplayData;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
-
-import org.hamcrest.CoreMatchers;
-import org.hamcrest.Description;
-import org.hamcrest.Matcher;
-import org.hamcrest.TypeSafeDiagnosingMatcher;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
+import org.apache.beam.sdk.coders.KvCoder;
+import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.testing.NeedsRunner;
+import org.apache.beam.sdk.testing.PAssert;
+import org.apache.beam.sdk.testing.TestPipeline;
+import org.apache.beam.sdk.transforms.ApproximateQuantiles.ApproximateQuantilesCombineFn;
+import org.apache.beam.sdk.transforms.display.DisplayData;
+import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollection;
+import org.hamcrest.CoreMatchers;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import org.hamcrest.TypeSafeDiagnosingMatcher;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Tests for {@link ApproximateQuantiles}.
@@ -64,15 +64,17 @@ public class ApproximateQuantilesTest {
       KV.of("b", 100)
   );
 
+  @Rule
+  public TestPipeline p = TestPipeline.create();
+
   public PCollection<KV<String, Integer>> createInputTable(Pipeline p) {
     return p.apply(Create.of(TABLE).withCoder(
         KvCoder.of(StringUtf8Coder.of(), BigEndianIntegerCoder.of())));
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testQuantilesGlobally() {
-    TestPipeline p = TestPipeline.create();
-
     PCollection<Integer> input = intRangeCollection(p, 101);
     PCollection<List<Integer>> quantiles =
         input.apply(ApproximateQuantiles.<Integer>globally(5));
@@ -83,9 +85,8 @@ public class ApproximateQuantilesTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testQuantilesGobally_comparable() {
-    TestPipeline p = TestPipeline.create();
-
     PCollection<Integer> input = intRangeCollection(p, 101);
     PCollection<List<Integer>> quantiles =
         input.apply(
@@ -97,9 +98,8 @@ public class ApproximateQuantilesTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testQuantilesPerKey() {
-    Pipeline p = TestPipeline.create();
-
     PCollection<KV<String, Integer>> input = createInputTable(p);
     PCollection<KV<String, List<Integer>>> quantiles = input.apply(
         ApproximateQuantiles.<String, Integer>perKey(2));
@@ -113,9 +113,8 @@ public class ApproximateQuantilesTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testQuantilesPerKey_reversed() {
-    Pipeline p = TestPipeline.create();
-
     PCollection<KV<String, Integer>> input = createInputTable(p);
     PCollection<KV<String, List<Integer>>> quantiles = input.apply(
         ApproximateQuantiles.<String, Integer, DescendingIntComparator>perKey(

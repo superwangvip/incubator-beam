@@ -17,14 +17,17 @@
  */
 package org.apache.beam.sdk.coders;
 
+import com.google.common.base.MoreObjects;
+import com.google.common.base.Objects;
 import com.google.common.collect.Lists;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.List;
+import javax.annotation.Nullable;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@code DelegateCoder<T, IntermediateT>} wraps a {@link Coder} for {@code IntermediateT} and
@@ -42,19 +45,27 @@ import java.util.List;
  * @param <T> The type of objects coded by this Coder.
  * @param <IntermediateT> The type of objects a {@code T} will be converted to for coding.
  */
-public class DelegateCoder<T, IntermediateT> extends CustomCoder<T> {
+public final class DelegateCoder<T, IntermediateT> extends CustomCoder<T> {
   /**
    * A {@link DelegateCoder.CodingFunction CodingFunction&lt;InputT, OutputT&gt;} is a serializable
    * function from {@code InputT} to {@code OutputT} that may throw any {@link Exception}.
    */
-  public static interface CodingFunction<InputT, OutputT> extends Serializable {
-     public abstract OutputT apply(InputT input) throws Exception;
+  public interface CodingFunction<InputT, OutputT> extends Serializable {
+     OutputT apply(InputT input) throws Exception;
   }
 
   public static <T, IntermediateT> DelegateCoder<T, IntermediateT> of(Coder<IntermediateT> coder,
       CodingFunction<T, IntermediateT> toFn,
       CodingFunction<IntermediateT, T> fromFn) {
-    return new DelegateCoder<T, IntermediateT>(coder, toFn, fromFn);
+    return of(coder, toFn, fromFn, null);
+  }
+
+  public static <T, IntermediateT> DelegateCoder<T, IntermediateT> of(
+      Coder<IntermediateT> coder,
+      CodingFunction<T, IntermediateT> toFn,
+      CodingFunction<IntermediateT, T> fromFn,
+      @Nullable TypeDescriptor<T> typeDescriptor) {
+    return new DelegateCoder<T, IntermediateT>(coder, toFn, fromFn, typeDescriptor);
   }
 
   @Override
@@ -101,8 +112,28 @@ public class DelegateCoder<T, IntermediateT> extends CustomCoder<T> {
   }
 
   @Override
+  public boolean equals(Object o) {
+    if (o == null || this.getClass() != o.getClass()) {
+      return false;
+    }
+    DelegateCoder<?, ?> that = (DelegateCoder<?, ?>) o;
+    return Objects.equal(this.coder, that.coder)
+        && Objects.equal(this.toFn, that.toFn)
+        && Objects.equal(this.fromFn, that.fromFn);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hashCode(this.coder, this.toFn, this.fromFn);
+  }
+
+  @Override
   public String toString() {
-    return "DelegateCoder(" + coder + ")";
+    return MoreObjects.toStringHelper(getClass())
+        .add("coder", coder)
+        .add("toFn", toFn)
+        .add("fromFn", fromFn)
+        .toString();
   }
 
   /**
@@ -133,6 +164,14 @@ public class DelegateCoder<T, IntermediateT> extends CustomCoder<T> {
     return allowedEncodings;
   }
 
+  @Override
+  public TypeDescriptor<T> getEncodedTypeDescriptor() {
+    if (typeDescriptor == null) {
+      return super.getEncodedTypeDescriptor();
+    }
+    return typeDescriptor;
+  }
+
   private String delegateEncodingId(Class<?> delegateClass, String encodingId) {
     return String.format("%s:%s", delegateClass.getName(), encodingId);
   }
@@ -155,11 +194,18 @@ public class DelegateCoder<T, IntermediateT> extends CustomCoder<T> {
   private final CodingFunction<T, IntermediateT> toFn;
   private final CodingFunction<IntermediateT, T> fromFn;
 
+  // null unless the user explicitly provides a TypeDescriptor.
+  // If null, then the machinery from the superclass (StandardCoder) will be used
+  // to try to deduce a good type descriptor.
+  @Nullable private final TypeDescriptor<T> typeDescriptor;
+
   protected DelegateCoder(Coder<IntermediateT> coder,
       CodingFunction<T, IntermediateT> toFn,
-      CodingFunction<IntermediateT, T> fromFn) {
+      CodingFunction<IntermediateT, T> fromFn,
+      @Nullable TypeDescriptor<T> typeDescriptor) {
     this.coder = coder;
     this.fromFn = fromFn;
     this.toFn = toFn;
+    this.typeDescriptor = typeDescriptor;
   }
 }

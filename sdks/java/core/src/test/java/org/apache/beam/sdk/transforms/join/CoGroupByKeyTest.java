@@ -21,6 +21,12 @@ import static org.hamcrest.collection.IsIterableContainingInAnyOrder.containsInA
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 
+import com.google.common.collect.Iterables;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
 import org.apache.beam.sdk.coders.KvCoder;
@@ -30,7 +36,6 @@ import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.DoFn.RequiresWindowAccess;
 import org.apache.beam.sdk.transforms.DoFnTester;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
@@ -41,20 +46,12 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TupleTag;
-
-import com.google.common.collect.Iterables;
-
 import org.joda.time.Duration;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Tests for CoGroupByKeyTest.  Implements Serializable for anonymous DoFns.
@@ -84,10 +81,11 @@ public class CoGroupByKeyTest implements Serializable {
       input = p.apply("Create" + name, Create.timestamped(list, timestamps)
           .withCoder(KvCoder.of(BigEndianIntegerCoder.of(), StringUtf8Coder.of())));
     }
-    return input
-            .apply("Identity" + name, ParDo.of(new DoFn<KV<Integer, String>,
-                                     KV<Integer, String>>() {
-              @Override
+    return input.apply(
+        "Identity" + name,
+        ParDo.of(
+            new DoFn<KV<Integer, String>, KV<Integer, String>>() {
+              @ProcessElement
               public void processElement(ProcessContext c) {
                 c.output(c.element());
               }
@@ -121,12 +119,14 @@ public class CoGroupByKeyTest implements Serializable {
     return coGbkResults;
   }
 
+  @Rule
+  public final transient TestPipeline p = TestPipeline.create();
+
   @Test
+  @Category(RunnableOnService.class)
   public void testCoGroupByKeyGetOnly() {
     final TupleTag<String> tag1 = new TupleTag<>();
     final TupleTag<String> tag2 = new TupleTag<>();
-
-    Pipeline p = TestPipeline.create();
 
     PCollection<KV<Integer, CoGbkResult>> coGbkResults =
         buildGetOnlyGbk(p, tag1, tag2);
@@ -260,12 +260,12 @@ public class CoGroupByKeyTest implements Serializable {
   }
 
   @Test
+  @Category(RunnableOnService.class)
   public void testCoGroupByKey() {
     final TupleTag<String> namesTag = new TupleTag<>();
     final TupleTag<String> addressesTag = new TupleTag<>();
     final TupleTag<String> purchasesTag = new TupleTag<>();
 
-    Pipeline p = TestPipeline.create();
 
     PCollection<KV<Integer, CoGbkResult>> coGbkResults =
         buildPurchasesCoGbk(p, purchasesTag, addressesTag, namesTag);
@@ -311,11 +311,11 @@ public class CoGroupByKeyTest implements Serializable {
   }
 
   /**
-   * A DoFn used in testCoGroupByKeyWithWindowing(), to test processing the
-   * results of a CoGroupByKey.
+   * A DoFn used in testCoGroupByKeyWithWindowing(), to test processing the results of a
+   * CoGroupByKey.
    */
-  private static class ClickOfPurchaseFn extends
-      DoFn<KV<Integer, CoGbkResult>, KV<String, String>> implements RequiresWindowAccess {
+  private static class ClickOfPurchaseFn
+      extends DoFn<KV<Integer, CoGbkResult>, KV<String, String>> {
     private final TupleTag<String> clicksTag;
 
     private final TupleTag<String> purchasesTag;
@@ -327,9 +327,9 @@ public class CoGroupByKeyTest implements Serializable {
       this.purchasesTag = purchasesTag;
     }
 
-    @Override
-    public void processElement(ProcessContext c) {
-      BoundedWindow w = c.window();
+    @ProcessElement
+    public void processElement(ProcessContext c, BoundedWindow window) {
+      BoundedWindow w = window;
       KV<Integer, CoGbkResult> e = c.element();
       CoGbkResult row = e.getValue();
       Iterable<String> clicks = row.getAll(clicksTag);
@@ -365,7 +365,7 @@ public class CoGroupByKeyTest implements Serializable {
       this.namesTag = namesTag;
     }
 
-    @Override
+    @ProcessElement
     public void processElement(ProcessContext c) {
       KV<Integer, CoGbkResult> e = c.element();
       CoGbkResult row = e.getValue();
@@ -404,7 +404,7 @@ public class CoGroupByKeyTest implements Serializable {
    */
   @SuppressWarnings("unchecked")
   @Test
-  public void testConsumingDoFn() {
+  public void testConsumingDoFn() throws Exception {
     TupleTag<String> purchasesTag = new TupleTag<>();
     TupleTag<String> addressesTag = new TupleTag<>();
     TupleTag<String> namesTag = new TupleTag<>();
@@ -436,7 +436,7 @@ public class CoGroupByKeyTest implements Serializable {
                 purchasesTag,
                 addressesTag,
                 namesTag))
-                .processBatch(
+                .processBundle(
                     KV.of(1, result1),
                     KV.of(2, result2),
                     KV.of(3, result3),
@@ -456,8 +456,6 @@ public class CoGroupByKeyTest implements Serializable {
     TupleTag<String> namesTag = new TupleTag<>();
     TupleTag<String> addressesTag = new TupleTag<>();
     TupleTag<String> purchasesTag = new TupleTag<>();
-
-    Pipeline p = TestPipeline.create();
 
     PCollection<KV<Integer, CoGbkResult>> coGbkResults =
         buildPurchasesCoGbk(p, purchasesTag, addressesTag, namesTag);
@@ -486,8 +484,6 @@ public class CoGroupByKeyTest implements Serializable {
   public void testCoGroupByKeyWithWindowing() {
     TupleTag<String> clicksTag = new TupleTag<>();
     TupleTag<String> purchasesTag = new TupleTag<>();
-
-    Pipeline p = TestPipeline.create();
 
     PCollection<KV<Integer, CoGbkResult>> coGbkResults =
         buildPurchasesCoGbkWithWindowing(p, clicksTag, purchasesTag);

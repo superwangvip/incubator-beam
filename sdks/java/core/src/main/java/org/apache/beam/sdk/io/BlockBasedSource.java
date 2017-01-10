@@ -17,13 +17,11 @@
  */
 package org.apache.beam.sdk.io;
 
-import org.apache.beam.sdk.annotations.Experimental;
-import org.apache.beam.sdk.options.PipelineOptions;
-
 import java.io.IOException;
 import java.util.NoSuchElementException;
-
 import javax.annotation.Nullable;
+import org.apache.beam.sdk.annotations.Experimental;
+import org.apache.beam.sdk.options.PipelineOptions;
 
 /**
  * A {@code BlockBasedSource} is a {@link FileBasedSource} where a file consists of blocks of
@@ -206,28 +204,32 @@ public abstract class BlockBasedSource<T> extends FileBasedSource<T> {
     }
 
     @Override
+    @Nullable
     public Double getFractionConsumed() {
-      if (getCurrentSource().getEndOffset() == Long.MAX_VALUE) {
-        return null;
-      }
-      Block<T> currentBlock = getCurrentBlock();
-      if (currentBlock == null) {
-        // There is no current block (i.e., the read has not yet begun).
+      if (!isStarted()) {
         return 0.0;
       }
+      if (isDone()) {
+        return 1.0;
+      }
+      FileBasedSource<T> source = getCurrentSource();
+      if (source.getEndOffset() == Long.MAX_VALUE) {
+        // Unknown end offset, so we cannot tell.
+        return null;
+      }
+
       long currentBlockOffset = getCurrentBlockOffset();
-      long startOffset = getCurrentSource().getStartOffset();
-      long endOffset = getCurrentSource().getEndOffset();
+      long startOffset = source.getStartOffset();
+      long endOffset = source.getEndOffset();
       double fractionAtBlockStart =
           ((double) (currentBlockOffset - startOffset)) / (endOffset - startOffset);
       double fractionAtBlockEnd =
           ((double) (currentBlockOffset + getCurrentBlockSize() - startOffset)
               / (endOffset - startOffset));
+      double blockFraction = getCurrentBlock().getFractionOfBlockConsumed();
       return Math.min(
           1.0,
-          fractionAtBlockStart
-          + currentBlock.getFractionOfBlockConsumed()
-            * (fractionAtBlockEnd - fractionAtBlockStart));
+          fractionAtBlockStart + blockFraction * (fractionAtBlockEnd - fractionAtBlockStart));
     }
 
     @Override

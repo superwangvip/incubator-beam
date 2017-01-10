@@ -15,31 +15,28 @@
     See the License for the specific language governing permissions and
     limitations under the License.
 -->
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
     <groupId>org.apache.beam</groupId>
-    <artifactId>flink-runner-parent</artifactId>
-    <version>0.1.0-incubating-SNAPSHOT</version>
+    <artifactId>beam-runners-flink-parent</artifactId>
+    <version>0.5.0-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
-  <artifactId>flink-runner-examples_2.10</artifactId>
+  <artifactId>beam-runners-flink_2.10-examples</artifactId>
 
   <name>Apache Beam :: Runners :: Flink :: Examples</name>
 
   <packaging>jar</packaging>
 
   <properties>
-    <!-- Default parameters for mvn exec:exec -->
-    <clazz>org.apache.beam.runners.flink.examples.WordCount</clazz>
-    <input>kinglear.txt</input>
-    <output>wordcounts.txt</output>
-    <parallelism>1</parallelism>
+    <!-- Default parameters for mvn exec:java -->
+    <flink.examples.input>kinglear.txt</flink.examples.input>
+    <flink.examples.output>wordcounts.txt</flink.examples.output>
+    <flink.examples.parallelism>-1</flink.examples.parallelism>
   </properties>
 
   <profiles>
@@ -71,20 +68,42 @@
 
     <dependency>
       <groupId>org.apache.beam</groupId>
-      <artifactId>flink-runner_2.10</artifactId>
+      <artifactId>beam-runners-flink_2.10</artifactId>
       <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-kafka-0.8_2.10</artifactId>
+      <version>${flink.version}</version>
     </dependency>
 
   </dependencies>
 
   <build>
     <plugins>
-      <!-- Checkstyle errors for now
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-checkstyle-plugin</artifactId>
+        <artifactId>maven-compiler-plugin</artifactId>
       </plugin>
-      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals><goal>analyze-only</goal></goals>
+            <configuration>
+              <!-- disable for now until dependencies are cleaned up -->
+              <failOnWarning>false</failOnWarning>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
 
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
@@ -92,12 +111,10 @@
         <configuration>
           <executable>java</executable>
           <arguments>
-            <argument>-classpath</argument>
-            <classpath/>
-            <argument>${clazz}</argument>
-            <argument>--input=${input}</argument>
-            <argument>--output=${output}</argument>
-            <argument>--parallelism=${parallelism}</argument>
+            <argument>--runner=org.apache.beam.runners.flink.FlinkRunner</argument>
+            <argument>--parallelism=${flink.examples.parallelism}</argument>
+            <argument>--input=${flink.examples.input}</argument>
+            <argument>--output=${flink.examples.output}</argument>
           </arguments>
         </configuration>
       </plugin>

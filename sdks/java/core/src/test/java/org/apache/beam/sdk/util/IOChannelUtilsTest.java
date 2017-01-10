@@ -17,20 +17,24 @@
  */
 package org.apache.beam.sdk.util;
 
+import static org.hamcrest.Matchers.instanceOf;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.fail;
 
+import com.google.common.collect.Sets;
 import com.google.common.io.Files;
-
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.File;
-import java.nio.charset.StandardCharsets;
 
 /**
  * Tests for IOChannelUtils.
@@ -39,6 +43,9 @@ import java.nio.charset.StandardCharsets;
 public class IOChannelUtilsTest {
   @Rule
   public TemporaryFolder tmpFolder = new TemporaryFolder();
+
+  @Rule
+  public ExpectedException thrown = ExpectedException.none();
 
   @Test
   public void testShardFormatExpansion() {
@@ -80,6 +87,12 @@ public class IOChannelUtilsTest {
   }
 
   @Test
+  public void testHandlerNoScheme() throws Exception {
+    String pathToTempFolder = tmpFolder.getRoot().getAbsolutePath();
+    assertThat(IOChannelUtils.getFactory(pathToTempFolder), instanceOf(FileIOChannelFactory.class));
+  }
+
+  @Test
   public void testGetSizeBytes() throws Exception {
     String data = "TestData";
     File file = tmpFolder.newFile();
@@ -88,8 +101,48 @@ public class IOChannelUtilsTest {
   }
 
   @Test
-  public void testResolve() throws Exception {
+  public void testResolveSinglePath() throws Exception {
     String expected = tmpFolder.getRoot().toPath().resolve("aa").toString();
     assertEquals(expected, IOChannelUtils.resolve(tmpFolder.getRoot().toString(), "aa"));
+  }
+
+  @Test
+  public void testResolveMultiplePaths() throws Exception {
+    String expected =
+        tmpFolder.getRoot().toPath().resolve("aa").resolve("bb").resolve("cc").toString();
+    assertEquals(expected,
+        IOChannelUtils.resolve(tmpFolder.getRoot().getPath(), "aa", "bb", "cc"));
+  }
+
+  @Test
+  public void testRegisterIOFactoriesAllowOverride() throws Exception {
+    IOChannelUtils.registerIOFactoriesAllowOverride(PipelineOptionsFactory.create());
+    IOChannelUtils.registerIOFactoriesAllowOverride(PipelineOptionsFactory.create());
+    assertNotNull(IOChannelUtils.getFactory("gs"));
+    assertNotNull(IOChannelUtils.getFactory("file"));
+  }
+
+  @Test
+  public void testRegisterIOFactories() throws Exception {
+    IOChannelUtils.deregisterScheme("gs");
+    IOChannelUtils.deregisterScheme("file");
+
+    IOChannelUtils.registerIOFactories(PipelineOptionsFactory.create());
+    assertNotNull(IOChannelUtils.getFactory("gs"));
+    assertNotNull(IOChannelUtils.getFactory("file"));
+    thrown.expect(RuntimeException.class);
+    thrown.expectMessage("Failed to register IOChannelFactory");
+    thrown.expectMessage("override is not allowed");
+    IOChannelUtils.registerIOFactories(PipelineOptionsFactory.create());
+  }
+
+  @Test
+  public void testCheckDuplicateScheme() throws Exception {
+    thrown.expect(RuntimeException.class);
+    thrown.expectMessage("Scheme: [file] has conflicting registrars");
+    IOChannelUtils.checkDuplicateScheme(
+        Sets.<IOChannelFactoryRegistrar>newHashSet(
+            new FileIOChannelFactoryRegistrar(),
+            new FileIOChannelFactoryRegistrar()));
   }
 }

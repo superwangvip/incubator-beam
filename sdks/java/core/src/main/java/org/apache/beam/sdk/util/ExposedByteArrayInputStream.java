@@ -29,8 +29,9 @@ public class ExposedByteArrayInputStream extends ByteArrayInputStream{
     super(buf);
   }
 
-  /** Read all remaining bytes.
-   * @throws IOException */
+  /**
+   * Read all remaining bytes.
+   */
   public byte[] readAll() throws IOException {
     if (pos == 0 && count == buf.length) {
       pos = count;

@@ -18,23 +18,26 @@
 package org.apache.beam.sdk.io;
 
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
-
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 
-import org.apache.beam.sdk.coders.AvroCoder;
-import org.apache.beam.sdk.coders.DefaultCoder;
-import org.apache.beam.sdk.io.AvroSource.AvroReader;
-import org.apache.beam.sdk.io.AvroSource.AvroReader.Seeker;
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.testing.SourceTestUtils;
-import org.apache.beam.sdk.transforms.display.DisplayData;
-
 import com.google.common.base.MoreObjects;
-
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PushbackInputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Objects;
+import java.util.Random;
 import org.apache.avro.Schema;
 import org.apache.avro.file.CodecFactory;
 import org.apache.avro.file.DataFileConstants;
@@ -44,23 +47,25 @@ import org.apache.avro.io.DatumWriter;
 import org.apache.avro.reflect.AvroDefault;
 import org.apache.avro.reflect.Nullable;
 import org.apache.avro.reflect.ReflectData;
+import org.apache.beam.sdk.coders.AvroCoder;
+import org.apache.beam.sdk.coders.DefaultCoder;
+import org.apache.beam.sdk.io.AvroSource.AvroReader;
+import org.apache.beam.sdk.io.AvroSource.AvroReader.Seeker;
+import org.apache.beam.sdk.io.BlockBasedSource.BlockBasedReader;
+import org.apache.beam.sdk.io.BoundedSource.BoundedReader;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.testing.SourceTestUtils;
+import org.apache.beam.sdk.transforms.display.DisplayData;
+import org.apache.beam.sdk.util.AvroUtils;
+import org.apache.beam.sdk.util.SerializableUtils;
+import org.hamcrest.Matchers;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.ByteArrayInputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.PushbackInputStream;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.NoSuchElementException;
-import java.util.Objects;
-import java.util.Random;
 
 /**
  * Tests for AvroSource.
@@ -129,10 +134,17 @@ public class AvroSourceTest {
   @Test
   public void testReadWithDifferentCodecs() throws Exception {
     // Test reading files generated using all codecs.
-    String codecs[] = {DataFileConstants.NULL_CODEC, DataFileConstants.BZIP2_CODEC,
-        DataFileConstants.DEFLATE_CODEC, DataFileConstants.SNAPPY_CODEC,
-        DataFileConstants.XZ_CODEC};
-    List<Bird> expected = createRandomRecords(DEFAULT_RECORD_COUNT);
+    String codecs[] = {
+        DataFileConstants.NULL_CODEC,
+        DataFileConstants.BZIP2_CODEC,
+        DataFileConstants.DEFLATE_CODEC,
+        DataFileConstants.SNAPPY_CODEC,
+        DataFileConstants.XZ_CODEC,
+    };
+    // As Avro's default block size is 64KB, write 64K records to ensure at least one full block.
+    // We could make this smaller than 64KB assuming each record is at least B bytes, but then the
+    // test could silently stop testing the failure condition from BEAM-422.
+    List<Bird> expected = createRandomRecords(1 << 16);
 
     for (String codec : codecs) {
       String filename = generateTestFile(
@@ -185,15 +197,95 @@ public class AvroSourceTest {
 
     AvroSource<FixedRecord> source = AvroSource.from(filename).withSchema(FixedRecord.class);
     try (BoundedSource.BoundedReader<FixedRecord> reader = source.createReader(null)) {
-      assertEquals(new Double(0.0), reader.getFractionConsumed());
+      assertEquals(Double.valueOf(0.0), reader.getFractionConsumed());
     }
 
     List<? extends BoundedSource<FixedRecord>> splits =
         source.splitIntoBundles(file.length() / 3, null);
     for (BoundedSource<FixedRecord> subSource : splits) {
       try (BoundedSource.BoundedReader<FixedRecord> reader = subSource.createReader(null)) {
-        assertEquals(new Double(0.0), reader.getFractionConsumed());
+        assertEquals(Double.valueOf(0.0), reader.getFractionConsumed());
       }
+    }
+  }
+
+  @Test
+  public void testProgress() throws Exception {
+    // 5 records, 2 per block.
+    List<FixedRecord> records = createFixedRecords(5);
+    String filename = generateTestFile("tmp.avro", records, SyncBehavior.SYNC_REGULAR, 2,
+        AvroCoder.of(FixedRecord.class), DataFileConstants.NULL_CODEC);
+
+    AvroSource<FixedRecord> source = AvroSource.from(filename).withSchema(FixedRecord.class);
+    try (BoundedSource.BoundedReader<FixedRecord> readerOrig = source.createReader(null)) {
+      assertThat(readerOrig, Matchers.instanceOf(BlockBasedReader.class));
+      BlockBasedReader<FixedRecord> reader = (BlockBasedReader<FixedRecord>) readerOrig;
+
+      // Before starting
+      assertEquals(0.0, reader.getFractionConsumed(), 1e-6);
+      assertEquals(0, reader.getSplitPointsConsumed());
+      assertEquals(BoundedReader.SPLIT_POINTS_UNKNOWN, reader.getSplitPointsRemaining());
+
+      // First 2 records are in the same block.
+      assertTrue(reader.start());
+      assertTrue(reader.isAtSplitPoint());
+      assertEquals(0, reader.getSplitPointsConsumed());
+      assertEquals(BoundedReader.SPLIT_POINTS_UNKNOWN, reader.getSplitPointsRemaining());
+      // continued
+      assertTrue(reader.advance());
+      assertFalse(reader.isAtSplitPoint());
+      assertEquals(0, reader.getSplitPointsConsumed());
+      assertEquals(BoundedReader.SPLIT_POINTS_UNKNOWN, reader.getSplitPointsRemaining());
+
+      // Second block -> parallelism consumed becomes 1.
+      assertTrue(reader.advance());
+      assertTrue(reader.isAtSplitPoint());
+      assertEquals(1, reader.getSplitPointsConsumed());
+      assertEquals(BoundedReader.SPLIT_POINTS_UNKNOWN, reader.getSplitPointsRemaining());
+      // continued
+      assertTrue(reader.advance());
+      assertFalse(reader.isAtSplitPoint());
+      assertEquals(1, reader.getSplitPointsConsumed());
+      assertEquals(BoundedReader.SPLIT_POINTS_UNKNOWN, reader.getSplitPointsRemaining());
+
+      // Third and final block -> parallelism consumed becomes 2, remaining becomes 1.
+      assertTrue(reader.advance());
+      assertTrue(reader.isAtSplitPoint());
+      assertEquals(2, reader.getSplitPointsConsumed());
+      assertEquals(1, reader.getSplitPointsRemaining());
+
+      // Done
+      assertFalse(reader.advance());
+      assertEquals(3, reader.getSplitPointsConsumed());
+      assertEquals(0, reader.getSplitPointsRemaining());
+      assertEquals(1.0, reader.getFractionConsumed(), 1e-6);
+    }
+  }
+
+  @Test
+  public void testProgressEmptySource() throws Exception {
+    // 0 records, 20 per block.
+    List<FixedRecord> records = Collections.emptyList();
+    String filename = generateTestFile("tmp.avro", records, SyncBehavior.SYNC_REGULAR, 2,
+        AvroCoder.of(FixedRecord.class), DataFileConstants.NULL_CODEC);
+
+    AvroSource<FixedRecord> source = AvroSource.from(filename).withSchema(FixedRecord.class);
+    try (BoundedSource.BoundedReader<FixedRecord> readerOrig = source.createReader(null)) {
+      assertThat(readerOrig, Matchers.instanceOf(BlockBasedReader.class));
+      BlockBasedReader<FixedRecord> reader = (BlockBasedReader<FixedRecord>) readerOrig;
+
+      // before starting
+      assertEquals(0.0, reader.getFractionConsumed(), 1e-6);
+      assertEquals(0, reader.getSplitPointsConsumed());
+      assertEquals(BoundedReader.SPLIT_POINTS_UNKNOWN, reader.getSplitPointsRemaining());
+
+      // confirm empty
+      assertFalse(reader.start());
+
+      // after reading empty source
+      assertEquals(0, reader.getSplitPointsConsumed());
+      assertEquals(0, reader.getSplitPointsRemaining());
+      assertEquals(1.0, reader.getFractionConsumed(), 1e-6);
     }
   }
 
@@ -334,6 +426,45 @@ public class AvroSourceTest {
     }
 
     assertThat(actual, containsInAnyOrder(expected.toArray()));
+  }
+
+  @Test
+  public void testSchemaStringIsInterned() throws Exception {
+    List<Bird> birds = createRandomRecords(100);
+    String filename = generateTestFile("tmp.avro", birds, SyncBehavior.SYNC_DEFAULT, 0,
+        AvroCoder.of(Bird.class), DataFileConstants.NULL_CODEC);
+    String schemaA = AvroUtils.readMetadataFromFile(filename).getSchemaString();
+    String schemaB = AvroUtils.readMetadataFromFile(filename).getSchemaString();
+    assertNotSame(schemaA, schemaB);
+
+    AvroSource<GenericRecord> sourceA = AvroSource.from(filename).withSchema(schemaA);
+    AvroSource<GenericRecord> sourceB = AvroSource.from(filename).withSchema(schemaB);
+    assertSame(sourceA.getSchema(), sourceB.getSchema());
+
+    // Ensure that deserialization still goes through interning
+    AvroSource<GenericRecord> sourceC = SerializableUtils.clone(sourceB);
+    assertSame(sourceA.getSchema(), sourceC.getSchema());
+  }
+
+  @Test
+  public void testSchemaIsInterned() throws Exception {
+    List<Bird> birds = createRandomRecords(100);
+    String filename = generateTestFile("tmp.avro", birds, SyncBehavior.SYNC_DEFAULT, 0,
+        AvroCoder.of(Bird.class), DataFileConstants.NULL_CODEC);
+    String schemaA = AvroUtils.readMetadataFromFile(filename).getSchemaString();
+    String schemaB = AvroUtils.readMetadataFromFile(filename).getSchemaString();
+    assertNotSame(schemaA, schemaB);
+
+    AvroSource<GenericRecord> sourceA = (AvroSource<GenericRecord>) AvroSource.from(filename)
+        .withSchema(schemaA).createForSubrangeOfFile(filename, 0L, 0L);
+    AvroSource<GenericRecord> sourceB = (AvroSource<GenericRecord>) AvroSource.from(filename)
+        .withSchema(schemaB).createForSubrangeOfFile(filename, 0L, 0L);
+    assertSame(sourceA.getReadSchema(), sourceA.getFileSchema());
+    assertSame(sourceA.getReadSchema(), sourceB.getReadSchema());
+    assertSame(sourceA.getReadSchema(), sourceB.getFileSchema());
+
+    // Schemas are transient and not serialized thus we don't need to worry about interning
+    // after deserialization.
   }
 
   private void assertEqualsWithGeneric(List<Bird> expected, List<GenericRecord> actual) {

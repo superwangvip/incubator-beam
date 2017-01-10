@@ -17,16 +17,16 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.PropertyNames;
-
-import com.google.common.base.Preconditions;
+import static com.google.common.base.Preconditions.checkArgument;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.apache.beam.sdk.util.PropertyNames;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.sdk.values.TypeParameter;
 
 /**
  * A {@link SetCoder} encodes any {@link Set} using the format of {@link IterableLikeCoder}. The
@@ -49,10 +49,9 @@ public class SetCoder<T> extends IterableLikeCoder<T, Set<T>> {
   @JsonCreator
   public static SetCoder<?> of(
       @JsonProperty(PropertyNames.COMPONENT_ENCODINGS)
-      List<Object> components) {
-    Preconditions.checkArgument(components.size() == 1,
-        "Expecting 1 component, got " + components.size());
-    return of((Coder<?>) components.get(0));
+      List<Coder<?>> components) {
+    checkArgument(components.size() == 1, "Expecting 1 component, got %s", components.size());
+    return of(components.get(0));
   }
 
   /**
@@ -65,6 +64,12 @@ public class SetCoder<T> extends IterableLikeCoder<T, Set<T>> {
   public void verifyDeterministic() throws NonDeterministicException {
     throw new NonDeterministicException(this,
         "Ordering of elements in a set may be non-deterministic.");
+  }
+
+  @Override
+  public TypeDescriptor<Set<T>> getEncodedTypeDescriptor() {
+    return new TypeDescriptor<Set<T>>() {}.where(
+        new TypeParameter<T>() {}, getElemCoder().getEncodedTypeDescriptor());
   }
 
   /**

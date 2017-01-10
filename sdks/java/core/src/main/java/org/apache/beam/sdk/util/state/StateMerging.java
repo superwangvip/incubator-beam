@@ -17,16 +17,14 @@
  */
 package org.apache.beam.sdk.util.state;
 
-import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
-
-import com.google.common.base.Preconditions;
-
-import org.joda.time.Instant;
+import static com.google.common.base.Preconditions.checkState;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
+import org.joda.time.Instant;
 
 /**
  * Helpers for merging state.
@@ -59,7 +57,7 @@ public class StateMerging {
     // Prefetch everything except what's already in result.
     for (BagState<T> source : map.values()) {
       if (!source.equals(result)) {
-        source.readLater();
+        prefetchRead(source);
       }
     }
   }
@@ -85,7 +83,7 @@ public class StateMerging {
     List<ReadableState<Iterable<T>>> futures = new ArrayList<>(sources.size());
     for (BagState<T> source : sources) {
       if (!source.equals(result)) {
-        source.readLater();
+        prefetchRead(source);
         futures.add(source);
       }
     }
@@ -115,7 +113,7 @@ public class StateMerging {
       prefetchCombiningValues(MergingStateAccessor<K, W> context,
           StateTag<? super K, StateT> address) {
     for (StateT state : context.accessInEachMergingWindow(address).values()) {
-      state.readLater();
+      prefetchRead(state);
     }
   }
 
@@ -147,7 +145,7 @@ public class StateMerging {
     // Prefetch.
     List<ReadableState<AccumT>> futures = new ArrayList<>(sources.size());
     for (AccumulatorCombiningState<InputT, AccumT, OutputT> source : sources) {
-      source.readLater();
+      prefetchRead(source);
     }
     // Read.
     List<AccumT> accumulators = new ArrayList<>(futures.size());
@@ -188,8 +186,12 @@ public class StateMerging {
     }
     // Prefetch.
     for (WatermarkHoldState<W> source : map.values()) {
-      source.readLater();
+      prefetchRead(source);
     }
+  }
+
+  private static void prefetchRead(ReadableState<?> source) {
+    source.readLater();
   }
 
   /**
@@ -228,7 +230,7 @@ public class StateMerging {
       // Update directly from window-derived hold.
       Instant hold = result.getOutputTimeFn().assignOutputTime(
           BoundedWindow.TIMESTAMP_MIN_VALUE, resultWindow);
-      Preconditions.checkState(hold.isAfter(BoundedWindow.TIMESTAMP_MIN_VALUE));
+      checkState(hold.isAfter(BoundedWindow.TIMESTAMP_MIN_VALUE));
       result.add(hold);
     } else {
       // Prefetch.

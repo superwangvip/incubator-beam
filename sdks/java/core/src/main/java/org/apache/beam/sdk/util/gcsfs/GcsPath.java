@@ -17,10 +17,10 @@
  */
 package org.apache.beam.sdk.util.gcsfs;
 
-import com.google.api.services.storage.model.StorageObject;
-import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Strings.isNullOrEmpty;
 
+import com.google.api.services.storage.model.StorageObject;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
@@ -34,7 +34,6 @@ import java.nio.file.WatchService;
 import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -80,18 +79,17 @@ public class GcsPath implements Path {
    * contain a port, user info, a query, or a fragment.
    */
   public static GcsPath fromUri(URI uri) {
-    Preconditions.checkArgument(uri.getScheme().equalsIgnoreCase(SCHEME),
-        "URI: %s is not a GCS URI", uri);
-    Preconditions.checkArgument(uri.getPort() == -1,
+    checkArgument(uri.getScheme().equalsIgnoreCase(SCHEME), "URI: %s is not a GCS URI", uri);
+    checkArgument(uri.getPort() == -1,
         "GCS URI may not specify port: %s (%i)", uri, uri.getPort());
-    Preconditions.checkArgument(
-        Strings.isNullOrEmpty(uri.getUserInfo()),
+    checkArgument(
+        isNullOrEmpty(uri.getUserInfo()),
         "GCS URI may not specify userInfo: %s (%s)", uri, uri.getUserInfo());
-    Preconditions.checkArgument(
-        Strings.isNullOrEmpty(uri.getQuery()),
+    checkArgument(
+        isNullOrEmpty(uri.getQuery()),
         "GCS URI may not specify query: %s (%s)", uri, uri.getQuery());
-    Preconditions.checkArgument(
-        Strings.isNullOrEmpty(uri.getFragment()),
+    checkArgument(
+        isNullOrEmpty(uri.getFragment()),
         "GCS URI may not specify fragment: %s (%s)", uri, uri.getFragment());
 
     return fromUri(uri.toString());
@@ -114,9 +112,9 @@ public class GcsPath implements Path {
    */
   public static GcsPath fromUri(String uri) {
     Matcher m = GCS_URI.matcher(uri);
-    Preconditions.checkArgument(m.matches(), "Invalid GCS URI: %s", uri);
+    checkArgument(m.matches(), "Invalid GCS URI: %s", uri);
 
-    Preconditions.checkArgument(m.group("SCHEME").equalsIgnoreCase(SCHEME),
+    checkArgument(m.group("SCHEME").equalsIgnoreCase(SCHEME),
         "URI: %s is not a GCS URI", uri);
     return new GcsPath(null, m.group("BUCKET"), m.group("OBJECT"));
   }
@@ -132,7 +130,7 @@ public class GcsPath implements Path {
    */
   public static GcsPath fromResourceName(String name) {
     Matcher m = GCS_RESOURCE_NAME.matcher(name);
-    Preconditions.checkArgument(m.matches(), "Invalid GCS resource name: %s", name);
+    checkArgument(m.matches(), "Invalid GCS resource name: %s", name);
 
     return new GcsPath(null, m.group("BUCKET"), m.group("OBJECT"));
   }
@@ -202,10 +200,9 @@ public class GcsPath implements Path {
     if (bucket == null) {
       bucket = "";
     }
-    Preconditions.checkArgument(!bucket.contains("/"),
+    checkArgument(!bucket.contains("/"),
         "GCS bucket may not contain a slash");
-    Preconditions
-        .checkArgument(bucket.isEmpty()
+    checkArgument(bucket.isEmpty()
                 || bucket.matches("[a-z0-9][-_a-z0-9.]+[a-z0-9]"),
             "GCS bucket names must contain only lowercase letters, numbers, "
                 + "dashes (-), underscores (_), and dots (.). Bucket names "
@@ -216,7 +213,7 @@ public class GcsPath implements Path {
     if (object == null) {
       object = "";
     }
-    Preconditions.checkArgument(
+    checkArgument(
         object.indexOf('\n') < 0 && object.indexOf('\r') < 0,
         "GCS object names must not contain Carriage Return or "
             + "Line Feed characters.");
@@ -264,7 +261,12 @@ public class GcsPath implements Path {
 
   @Override
   public GcsPath getFileName() {
-    throw new UnsupportedOperationException();
+    int nameCount = getNameCount();
+    if (nameCount < 2) {
+      throw new UnsupportedOperationException(
+          "Can't get filename from root path in the bucket: " + this);
+    }
+    return getName(nameCount - 1);
   }
 
   /**
@@ -318,32 +320,32 @@ public class GcsPath implements Path {
 
   @Override
   public GcsPath getName(int count) {
-    Preconditions.checkArgument(count >= 0);
+    checkArgument(count >= 0);
 
     Iterator<Path> iterator = iterator();
     for (int i = 0; i < count; ++i) {
-      Preconditions.checkArgument(iterator.hasNext());
+      checkArgument(iterator.hasNext());
       iterator.next();
     }
 
-    Preconditions.checkArgument(iterator.hasNext());
+    checkArgument(iterator.hasNext());
     return (GcsPath) iterator.next();
   }
 
   @Override
   public GcsPath subpath(int beginIndex, int endIndex) {
-    Preconditions.checkArgument(beginIndex >= 0);
-    Preconditions.checkArgument(endIndex > beginIndex);
+    checkArgument(beginIndex >= 0);
+    checkArgument(endIndex > beginIndex);
 
     Iterator<Path> iterator = iterator();
     for (int i = 0; i < beginIndex; ++i) {
-      Preconditions.checkArgument(iterator.hasNext());
+      checkArgument(iterator.hasNext());
       iterator.next();
     }
 
     GcsPath path = null;
     while (beginIndex < endIndex) {
-      Preconditions.checkArgument(iterator.hasNext());
+      checkArgument(iterator.hasNext());
       if (path == null) {
         path = (GcsPath) iterator.next();
       } else {
@@ -439,7 +441,11 @@ public class GcsPath implements Path {
 
   @Override
   public Path resolveSibling(String other) {
-    throw new UnsupportedOperationException();
+    if (getNameCount() < 2) {
+      throw new UnsupportedOperationException("Can't resolve the sibling of a root path: " + this);
+    }
+    GcsPath parent = getParent();
+    return (parent == null) ? fromUri(other) : parent.resolve(other);
   }
 
   @Override
@@ -492,7 +498,7 @@ public class GcsPath implements Path {
 
     @Override
     public boolean hasNext() {
-      return !Strings.isNullOrEmpty(name);
+      return !isNullOrEmpty(name);
     }
 
     @Override

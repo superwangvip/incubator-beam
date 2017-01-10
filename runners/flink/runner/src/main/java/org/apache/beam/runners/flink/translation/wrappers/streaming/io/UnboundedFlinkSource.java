@@ -17,18 +17,16 @@
  */
 package org.apache.beam.runners.flink.translation.wrappers.streaming.io;
 
-import org.apache.beam.runners.flink.translation.types.CoderTypeInformation;
+import static com.google.common.base.Preconditions.checkNotNull;
+
+import java.util.List;
+import javax.annotation.Nullable;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.io.UnboundedSource;
 import org.apache.beam.sdk.options.PipelineOptions;
-
-import com.google.common.base.Preconditions;
-
+import org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks;
+import org.apache.flink.streaming.api.functions.IngestionTimeExtractor;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
-
-import java.util.List;
-
-import javax.annotation.Nullable;
 
 /**
  * A wrapper translating Flink Sources implementing the {@link SourceFunction} interface, into
@@ -38,31 +36,51 @@ public class UnboundedFlinkSource<T> extends UnboundedSource<T, UnboundedSource.
 
   private final SourceFunction<T> flinkSource;
 
-  /** Coder set during translation */
+  /** Coder set during translation. */
   private Coder<T> coder;
 
+  /** Timestamp / watermark assigner for source; defaults to ingestion time. */
+  private AssignerWithPeriodicWatermarks<T> flinkTimestampAssigner =
+      new IngestionTimeExtractor<T>();
+
   public UnboundedFlinkSource(SourceFunction<T> source) {
-    flinkSource = Preconditions.checkNotNull(source);
+    flinkSource = checkNotNull(source);
+  }
+
+  public UnboundedFlinkSource(SourceFunction<T> source,
+                              AssignerWithPeriodicWatermarks<T> timestampAssigner) {
+    flinkSource = checkNotNull(source);
+    flinkTimestampAssigner = checkNotNull(timestampAssigner);
   }
 
   public SourceFunction<T> getFlinkSource() {
     return this.flinkSource;
   }
 
-  @Override
-  public List<? extends UnboundedSource<T, UnboundedSource.CheckpointMark>> generateInitialSplits(int desiredNumSplits, PipelineOptions options) throws Exception {
-    throw new RuntimeException("Flink Sources are supported only when running with the FlinkPipelineRunner.");
+  public AssignerWithPeriodicWatermarks<T> getFlinkTimestampAssigner() {
+    return flinkTimestampAssigner;
   }
 
   @Override
-  public UnboundedReader<T> createReader(PipelineOptions options, @Nullable CheckpointMark checkpointMark) {
-    throw new RuntimeException("Flink Sources are supported only when running with the FlinkPipelineRunner.");
+  public List<? extends UnboundedSource<T, UnboundedSource.CheckpointMark>> generateInitialSplits(
+      int desiredNumSplits,
+      PipelineOptions options) throws Exception {
+    throw new RuntimeException("Flink Sources are supported only when "
+        + "running with the FlinkRunner.");
+  }
+
+  @Override
+  public UnboundedReader<T> createReader(PipelineOptions options,
+                                         @Nullable CheckpointMark checkpointMark) {
+    throw new RuntimeException("Flink Sources are supported only when "
+        + "running with the FlinkRunner.");
   }
 
   @Nullable
   @Override
   public Coder<UnboundedSource.CheckpointMark> getCheckpointMarkCoder() {
-    throw new RuntimeException("Flink Sources are supported only when running with the FlinkPipelineRunner.");
+    throw new RuntimeException("Flink Sources are supported only when "
+        + "running with the FlinkRunner.");
   }
 
 
@@ -80,13 +98,23 @@ public class UnboundedFlinkSource<T> extends UnboundedSource<T, UnboundedSource.
     this.coder = coder;
   }
 
+  public void setFlinkTimestampAssigner(AssignerWithPeriodicWatermarks<T> flinkTimestampAssigner) {
+    this.flinkTimestampAssigner = flinkTimestampAssigner;
+  }
+
   /**
    * Creates a new unbounded source from a Flink source.
    * @param flinkSource The Flink source function
    * @param <T> The type that the source function produces.
    * @return The wrapped source function.
    */
-  public static <T> UnboundedSource<T, UnboundedSource.CheckpointMark> of(SourceFunction<T> flinkSource) {
+  public static <T> UnboundedSource<T, UnboundedSource.CheckpointMark> of(
+      SourceFunction<T> flinkSource) {
     return new UnboundedFlinkSource<>(flinkSource);
+  }
+
+  public static <T> UnboundedSource<T, UnboundedSource.CheckpointMark> of(
+          SourceFunction<T> flinkSource, AssignerWithPeriodicWatermarks<T> flinkTimestampAssigner) {
+    return new UnboundedFlinkSource<>(flinkSource, flinkTimestampAssigner);
   }
 }

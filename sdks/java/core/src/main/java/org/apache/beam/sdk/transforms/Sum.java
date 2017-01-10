@@ -17,10 +17,6 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import org.apache.beam.sdk.util.common.Counter;
-import org.apache.beam.sdk.util.common.Counter.AggregationKind;
-import org.apache.beam.sdk.util.common.CounterProvider;
-
 /**
  * {@code PTransform}s for computing the sum of the elements in a
  * {@code PCollection}, or the sum of the values associated with
@@ -54,7 +50,7 @@ public class Sum {
    * {@code 0} if there are no elements.
    */
   public static Combine.Globally<Integer, Integer> integersGlobally() {
-    return Combine.globally(new SumIntegerFn()).named("Sum.Globally");
+    return Combine.globally(Sum.ofIntegers());
   }
 
   /**
@@ -66,7 +62,7 @@ public class Sum {
    * that key in the input {@code PCollection}.
    */
   public static <K> Combine.PerKey<K, Integer, Integer> integersPerKey() {
-    return Combine.<K, Integer, Integer>perKey(new SumIntegerFn()).named("Sum.PerKey");
+    return Combine.<K, Integer, Integer>perKey(Sum.ofIntegers());
   }
 
   /**
@@ -77,7 +73,7 @@ public class Sum {
    * {@code 0} if there are no elements.
    */
   public static Combine.Globally<Long, Long> longsGlobally() {
-    return Combine.globally(new SumLongFn()).named("Sum.Globally");
+    return Combine.globally(Sum.ofLongs());
   }
 
   /**
@@ -89,7 +85,7 @@ public class Sum {
    * that key in the input {@code PCollection}.
    */
   public static <K> Combine.PerKey<K, Long, Long> longsPerKey() {
-    return Combine.<K, Long, Long>perKey(new SumLongFn()).named("Sum.PerKey");
+    return Combine.<K, Long, Long>perKey(Sum.ofLongs());
   }
 
   /**
@@ -100,7 +96,7 @@ public class Sum {
    * {@code 0} if there are no elements.
    */
   public static Combine.Globally<Double, Double> doublesGlobally() {
-    return Combine.globally(new SumDoubleFn()).named("Sum.Globally");
+    return Combine.globally(Sum.ofDoubles());
   }
 
   /**
@@ -112,19 +108,40 @@ public class Sum {
    * that key in the input {@code PCollection}.
    */
   public static <K> Combine.PerKey<K, Double, Double> doublesPerKey() {
-    return Combine.<K, Double, Double>perKey(new SumDoubleFn()).named("Sum.PerKey");
+    return Combine.<K, Double, Double>perKey(Sum.ofDoubles());
   }
-
-
-  /////////////////////////////////////////////////////////////////////////////
 
   /**
    * A {@code SerializableFunction} that computes the sum of an
    * {@code Iterable} of {@code Integer}s, useful as an argument to
    * {@link Combine#globally} or {@link Combine#perKey}.
    */
-  public static class SumIntegerFn
-      extends Combine.BinaryCombineIntegerFn implements CounterProvider<Integer> {
+  public static Combine.BinaryCombineIntegerFn ofIntegers() {
+    return new SumIntegerFn();
+  }
+
+  /**
+   * A {@code SerializableFunction} that computes the sum of an
+   * {@code Iterable} of {@code Double}s, useful as an argument to
+   * {@link Combine#globally} or {@link Combine#perKey}.
+   */
+  public static Combine.BinaryCombineDoubleFn ofDoubles() {
+    return new SumDoubleFn();
+  }
+
+  /**
+   * A {@code SerializableFunction} that computes the sum of an
+   * {@code Iterable} of {@code Long}s, useful as an argument to
+   * {@link Combine#globally} or {@link Combine#perKey}.
+   */
+  public static Combine.BinaryCombineLongFn ofLongs() {
+    return new SumLongFn();
+  }
+
+  /////////////////////////////////////////////////////////////////////////////
+
+  private static class SumIntegerFn extends Combine.BinaryCombineIntegerFn {
+
     @Override
     public int apply(int a, int b) {
       return a + b;
@@ -134,20 +151,10 @@ public class Sum {
     public int identity() {
       return 0;
     }
-
-    @Override
-    public Counter<Integer> getCounter(String name) {
-      return Counter.ints(name, AggregationKind.SUM);
-    }
   }
 
-  /**
-   * A {@code SerializableFunction} that computes the sum of an
-   * {@code Iterable} of {@code Long}s, useful as an argument to
-   * {@link Combine#globally} or {@link Combine#perKey}.
-   */
-  public static class SumLongFn
-      extends Combine.BinaryCombineLongFn implements CounterProvider<Long> {
+  private static class SumLongFn extends Combine.BinaryCombineLongFn {
+
     @Override
     public long apply(long a, long b) {
       return a + b;
@@ -157,20 +164,10 @@ public class Sum {
     public long identity() {
       return 0;
     }
-
-    @Override
-    public Counter<Long> getCounter(String name) {
-      return Counter.longs(name, AggregationKind.SUM);
-    }
   }
 
-  /**
-   * A {@code SerializableFunction} that computes the sum of an
-   * {@code Iterable} of {@code Double}s, useful as an argument to
-   * {@link Combine#globally} or {@link Combine#perKey}.
-   */
-  public static class SumDoubleFn
-      extends Combine.BinaryCombineDoubleFn implements CounterProvider<Double> {
+  private static class SumDoubleFn extends Combine.BinaryCombineDoubleFn {
+
     @Override
     public double apply(double a, double b) {
       return a + b;
@@ -179,11 +176,6 @@ public class Sum {
     @Override
     public double identity() {
       return 0;
-    }
-
-    @Override
-    public Counter<Double> getCounter(String name) {
-      return Counter.doubles(name, AggregationKind.SUM);
     }
   }
 }

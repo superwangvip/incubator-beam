@@ -17,8 +17,10 @@
  */
 package org.apache.beam.sdk.io.range;
 
-import com.google.common.annotations.VisibleForTesting;
+import static com.google.common.base.Preconditions.checkState;
 
+import com.google.common.annotations.VisibleForTesting;
+import org.apache.beam.sdk.io.BoundedSource.BoundedReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,10 +30,12 @@ import org.slf4j.LoggerFactory;
 public class OffsetRangeTracker implements RangeTracker<Long> {
   private static final Logger LOG = LoggerFactory.getLogger(OffsetRangeTracker.class);
 
-  private final long startOffset;
+  private long startOffset;
   private long stopOffset;
   private long lastRecordStart = -1L;
   private long offsetOfLastSplitPoint = -1L;
+  private long splitPointsSeen = 0L;
+  private boolean done = false;
 
   /**
    * Offset corresponding to infinity. This can only be used as the upper-bound of a range, and
@@ -47,6 +51,15 @@ public class OffsetRangeTracker implements RangeTracker<Long> {
   public OffsetRangeTracker(long startOffset, long stopOffset) {
     this.startOffset = startOffset;
     this.stopOffset = stopOffset;
+  }
+
+  public synchronized boolean isStarted() {
+    // done => started: handles the case when the reader was empty.
+    return (offsetOfLastSplitPoint != -1) || done;
+  }
+
+  public synchronized boolean isDone() {
+    return done;
   }
 
   @Override
@@ -65,9 +78,17 @@ public class OffsetRangeTracker implements RangeTracker<Long> {
   }
 
   public synchronized boolean tryReturnRecordAt(boolean isAtSplitPoint, long recordStart) {
-    if (lastRecordStart == -1 && !isAtSplitPoint) {
+    if (!isStarted() && !isAtSplitPoint) {
       throw new IllegalStateException(
           String.format("The first record [starting at %d] must be at a split point", recordStart));
+    }
+    if (recordStart < startOffset) {
+      throw new IllegalStateException(
+          String.format(
+              "Trying to return record [starting at %d] which is before the start offset [%d]",
+              recordStart,
+              startOffset));
+
     }
     if (recordStart < lastRecordStart) {
       throw new IllegalStateException(
@@ -77,8 +98,14 @@ public class OffsetRangeTracker implements RangeTracker<Long> {
               recordStart,
               lastRecordStart));
     }
+
+    if (lastRecordStart == -1) {
+      startOffset = recordStart;
+    }
+    lastRecordStart = recordStart;
+
     if (isAtSplitPoint) {
-      if (offsetOfLastSplitPoint != -1L && recordStart == offsetOfLastSplitPoint) {
+      if (recordStart == offsetOfLastSplitPoint) {
         throw new IllegalStateException(
             String.format(
                 "Record at a split point has same offset as the previous split point: "
@@ -86,12 +113,13 @@ public class OffsetRangeTracker implements RangeTracker<Long> {
                 offsetOfLastSplitPoint, recordStart));
       }
       if (recordStart >= stopOffset) {
+        done = true;
         return false;
       }
       offsetOfLastSplitPoint = recordStart;
+      ++splitPointsSeen;
     }
 
-    lastRecordStart = recordStart;
     return true;
   }
 
@@ -105,7 +133,7 @@ public class OffsetRangeTracker implements RangeTracker<Long> {
       LOG.debug("Refusing to split {} at {}: stop position unspecified", this, splitOffset);
       return false;
     }
-    if (lastRecordStart == -1) {
+    if (!isStarted()) {
       LOG.debug("Refusing to split {} at {}: unstarted", this, splitOffset);
       return false;
     }
@@ -138,22 +166,77 @@ public class OffsetRangeTracker implements RangeTracker<Long> {
       throw new IllegalArgumentException(
           "getPositionForFractionConsumed is not applicable to an unbounded range: " + this);
     }
-    return (long) Math.ceil(startOffset + fraction * (stopOffset - startOffset));
+    return (long) Math.floor(startOffset + fraction * (stopOffset - startOffset));
   }
 
   @Override
   public synchronized double getFractionConsumed() {
-    if (stopOffset == OFFSET_INFINITY) {
+    if (!isStarted()) {
       return 0.0;
-    }
-    if (lastRecordStart == -1) {
+    } else if (isDone()) {
+      return 1.0;
+    } else if (stopOffset == OFFSET_INFINITY) {
       return 0.0;
+    } else if (lastRecordStart >= stopOffset) {
+      return 1.0;
+    } else {
+      // E.g., when reading [3, 6) and lastRecordStart is 4, that means we consumed 3 of 3,4,5
+      // which is (4 - 3) / (6 - 3) = 33%.
+      // Also, clamp to at most 1.0 because the last consumed position can extend past the
+      // stop position.
+      return Math.min(1.0, 1.0 * (lastRecordStart - startOffset) / (stopOffset - startOffset));
     }
-    // E.g., when reading [3, 6) and lastRecordStart is 4, that means we consumed 3,4 of 3,4,5
-    // which is (4 - 3 + 1) / (6 - 3) = 67%.
-    // Also, clamp to at most 1.0 because the last consumed position can extend past the
-    // stop position.
-    return Math.min(1.0, 1.0 * (lastRecordStart - startOffset + 1) / (stopOffset - startOffset));
+  }
+
+  /**
+   * Returns the total number of split points that have been processed.
+   *
+   * <p>A split point at a particular offset has been seen if there has been a corresponding call
+   * to {@link #tryReturnRecordAt(boolean, long)} with {@code isAtSplitPoint} true. It has been
+   * processed if there has been a <em>subsequent</em> call to
+   * {@link #tryReturnRecordAt(boolean, long)} with {@code isAtSplitPoint} true and at a larger
+   * offset.
+   *
+   * <p>Note that for correctness when implementing {@link BoundedReader#getSplitPointsConsumed()},
+   * if a reader finishes before {@link #tryReturnRecordAt(boolean, long)} returns false,
+   * the reader should add an additional call to {@link #markDone()}. This will indicate that
+   * processing for the last seen split point has been finished.
+   *
+   * @see org.apache.beam.sdk.io.OffsetBasedSource for a {@link BoundedReader}
+   * implemented using {@link OffsetRangeTracker}.
+   */
+  public synchronized long getSplitPointsProcessed() {
+    if (!isStarted()) {
+      return 0;
+    } else if (isDone()) {
+      return splitPointsSeen;
+    } else {
+      // There is a current split point, and it has not finished processing.
+      checkState(
+          splitPointsSeen > 0,
+          "A started rangeTracker should have seen > 0 split points (is %s)",
+          splitPointsSeen);
+      return splitPointsSeen - 1;
+    }
+  }
+
+
+  /**
+   * Marks this range tracker as being done. Specifically, this will mark the current split point,
+   * if one exists, as being finished.
+   *
+   * <p>Always returns false, so that it can be used in an implementation of
+   * {@link BoundedReader#start()} or {@link BoundedReader#advance()} as follows:
+   *
+   * <pre> {@code
+   * public boolean start() {
+   *   return startImpl() && rangeTracker.tryReturnRecordAt(isAtSplitPoint, position)
+   *       || rangeTracker.markDone();
+   * }} </pre>
+   */
+  public synchronized boolean markDone() {
+    done = true;
+    return false;
   }
 
   @Override
@@ -177,7 +260,10 @@ public class OffsetRangeTracker implements RangeTracker<Long> {
   @VisibleForTesting
   OffsetRangeTracker copy() {
     OffsetRangeTracker res = new OffsetRangeTracker(startOffset, stopOffset);
+    res.offsetOfLastSplitPoint = this.offsetOfLastSplitPoint;
     res.lastRecordStart = this.lastRecordStart;
+    res.done = this.done;
+    res.splitPointsSeen = this.splitPointsSeen;
     return res;
   }
 }

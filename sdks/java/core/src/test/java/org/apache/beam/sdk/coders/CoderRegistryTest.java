@@ -21,30 +21,9 @@ import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.assertEquals;
 
-import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.CoderRegistry.IncompatibleCoderException;
-import org.apache.beam.sdk.coders.protobuf.ProtoCoder;
-import org.apache.beam.sdk.testing.TestPipeline;
-import org.apache.beam.sdk.transforms.Create;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.util.CloudObject;
-import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.TypeDescriptor;
-
 import com.google.cloud.dataflow.sdk.coders.Proto2CoderTestMessages.MessageA;
 import com.google.common.collect.ImmutableList;
 import com.google.protobuf.Duration;
-
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.ExpectedException;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -56,12 +35,34 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.apache.beam.sdk.coders.CoderRegistry.IncompatibleCoderException;
+import org.apache.beam.sdk.coders.protobuf.ProtoCoder;
+import org.apache.beam.sdk.testing.NeedsRunner;
+import org.apache.beam.sdk.testing.TestPipeline;
+import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.util.CloudObject;
+import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
+import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.junit.rules.ExpectedException;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Tests for CoderRegistry.
  */
 @RunWith(JUnit4.class)
 public class CoderRegistryTest {
+
+  @Rule
+  public TestPipeline pipeline = TestPipeline.create();
 
   @Rule
   public ExpectedException thrown = ExpectedException.none();
@@ -365,13 +366,13 @@ public class CoderRegistryTest {
   extends PTransform<PCollection<String>, PCollection<KV<String, MySerializableGeneric<String>>>> {
 
     private class OutputDoFn extends DoFn<String, KV<String, MySerializableGeneric<String>>> {
-      @Override
+      @ProcessElement
       public void processElement(ProcessContext c) { }
     }
 
     @Override
     public PCollection<KV<String, MySerializableGeneric<String>>>
-    apply(PCollection<String> input) {
+    expand(PCollection<String> input) {
       return input.apply(ParDo.of(new OutputDoFn()));
     }
   }
@@ -386,22 +387,35 @@ public class CoderRegistryTest {
 
     thrown.expect(CannotProvideCoderException.class);
     thrown.expectMessage(allOf(
-        containsString("TestGenericT"),
-        containsString("erasure"),
-        containsString("org.apache.beam.sdk.coders.CoderRegistryTest$TestGenericClass")));
+        containsString("No CoderFactory has been registered"),
+        containsString("does not have a @DefaultCoder annotation"),
+        containsString("does not implement Serializable")));
     registry.getDefaultCoder(TypeDescriptor.of(
         TestGenericClass.class.getTypeParameters()[0]));
   }
 
   private static class TestGenericClass<TestGenericT> { }
 
+  @Test
+  @SuppressWarnings("rawtypes")
+  public void testSerializableTypeVariableDefaultCoder() throws Exception {
+    CoderRegistry registry = new CoderRegistry();
+
+    TypeDescriptor type = TypeDescriptor.of(
+        TestSerializableGenericClass.class.getTypeParameters()[0]);
+    assertEquals(registry.getDefaultCoder(type),
+        SerializableCoder.of(type));
+  }
+
+  private static class TestSerializableGenericClass<TestGenericT extends Serializable> {}
+
   /**
    * In-context test that assures the functionality tested in
    * {@link #testDefaultCoderAnnotationGeneric} is invoked in the right ways.
    */
   @Test
+  @Category(NeedsRunner.class)
   public void testSpecializedButIgnoredGenericInPipeline() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
 
     pipeline
         .apply(Create.of("hello", "goodbye"))
@@ -416,20 +430,20 @@ public class CoderRegistryTest {
       PCollection<KV<String, MySerializableGeneric<T>>>> {
 
     private class OutputDoFn extends DoFn<String, KV<String, MySerializableGeneric<T>>> {
-      @Override
+      @ProcessElement
       public void processElement(ProcessContext c) { }
     }
 
     @Override
     public PCollection<KV<String, MySerializableGeneric<T>>>
-    apply(PCollection<String> input) {
+    expand(PCollection<String> input) {
       return input.apply(ParDo.of(new OutputDoFn()));
     }
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testIgnoredGenericInPipeline() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
 
     pipeline
         .apply(Create.of("hello", "goodbye"))
@@ -445,6 +459,7 @@ public class CoderRegistryTest {
   private static class MyValueCoder implements Coder<MyValue> {
 
     private static final MyValueCoder INSTANCE = new MyValueCoder();
+    private static final TypeDescriptor<MyValue> TYPE_DESCRIPTOR = TypeDescriptor.of(MyValue.class);
 
     public static MyValueCoder of() {
       return INSTANCE;
@@ -510,6 +525,11 @@ public class CoderRegistryTest {
     @Override
     public Collection<String> getAllowedEncodings() {
       return Collections.singletonList(getEncodingId());
+    }
+
+    @Override
+    public TypeDescriptor<MyValue> getEncodedTypeDescriptor() {
+      return TYPE_DESCRIPTOR;
     }
   }
 

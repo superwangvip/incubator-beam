@@ -17,26 +17,30 @@
  */
 package org.apache.beam.sdk.options;
 
-import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.options.GoogleApiDebugOptions.GoogleApiTracer;
-import org.apache.beam.sdk.options.ProxyInvocationHandler.Deserializer;
-import org.apache.beam.sdk.options.ProxyInvocationHandler.Serializer;
-import org.apache.beam.sdk.runners.DirectPipelineRunner;
-import org.apache.beam.sdk.runners.PipelineRunner;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.DoFn.Context;
-import org.apache.beam.sdk.transforms.display.HasDisplayData;
-import com.google.auto.service.AutoService;
-
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-
+import com.google.auto.service.AutoService;
+import com.google.common.base.MoreObjects;
 import java.lang.reflect.Proxy;
+import java.util.Map;
 import java.util.ServiceLoader;
-
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.concurrent.ThreadSafe;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.options.GoogleApiDebugOptions.GoogleApiTracer;
+import org.apache.beam.sdk.options.ProxyInvocationHandler.Deserializer;
+import org.apache.beam.sdk.options.ProxyInvocationHandler.Serializer;
+import org.apache.beam.sdk.runners.PipelineRunner;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.DoFn.Context;
+import org.apache.beam.sdk.transforms.display.HasDisplayData;
+import org.joda.time.DateTimeUtils;
+import org.joda.time.DateTimeZone;
+import org.joda.time.format.DateTimeFormat;
+import org.joda.time.format.DateTimeFormatter;
 
 /**
  * PipelineOptions are used to configure Pipelines. You can extend {@link PipelineOptions}
@@ -70,10 +74,9 @@ import javax.annotation.concurrent.ThreadSafe;
  *   p.run();
  * }
  *
- * // To create options for the DirectPipeline:
- * DirectPipelineOptions directPipelineOptions =
- *     PipelineOptionsFactory.as(DirectPipelineOptions.class);
- * directPipelineOptions.setStreaming(true);
+ * // To create options for the DirectRunner:
+ * DirectOptions directRunnerOptions =
+ *     PipelineOptionsFactory.as(DirectOptions.class);
  *
  * // To cast from one type to another using the as(Class) method:
  * DataflowPipelineOptions dataflowPipelineOptions =
@@ -92,7 +95,7 @@ import javax.annotation.concurrent.ThreadSafe;
  *
  * <h2>Defining Your Own PipelineOptions</h2>
  *
- * Defining your own {@link PipelineOptions} is the way for you to make configuration
+ * <p>Defining your own {@link PipelineOptions} is the way for you to make configuration
  * options available for both local execution and execution via a {@link PipelineRunner}.
  * By having PipelineOptionsFactory as your command-line interpreter, you will provide
  * a standardized way for users to interact with your application via the command-line.
@@ -116,7 +119,7 @@ import javax.annotation.concurrent.ThreadSafe;
  *
  * <h3>Restrictions</h3>
  *
- * Since PipelineOptions can be "cast" to multiple types dynamically using
+ * <p>Since PipelineOptions can be "cast" to multiple types dynamically using
  * {@link PipelineOptions#as(Class)}, a property must conform to the following set of restrictions:
  * <ul>
  *   <li>Any property with the same name must have the same return type for all derived
@@ -133,7 +136,7 @@ import javax.annotation.concurrent.ThreadSafe;
  *
  * <h3>Annotations For PipelineOptions</h3>
  *
- * {@link Description @Description} can be used to annotate an interface or a getter
+ * <p>{@link Description @Description} can be used to annotate an interface or a getter
  * with useful information which is output when {@code --help}
  * is invoked via {@link PipelineOptionsFactory#fromArgs(String[])}.
  *
@@ -157,7 +160,7 @@ import javax.annotation.concurrent.ThreadSafe;
  *
  * <h2>Registration Of PipelineOptions</h2>
  *
- * Registration of {@link PipelineOptions} by an application guarantees that the
+ * <p>Registration of {@link PipelineOptions} by an application guarantees that the
  * {@link PipelineOptions} is composable during execution of their {@link Pipeline} and
  * meets the restrictions listed above or will fail during registration. Registration
  * also lists the registered {@link PipelineOptions} when {@code --help}
@@ -209,14 +212,6 @@ public interface PipelineOptions extends HasDisplayData {
   <T extends PipelineOptions> T as(Class<T> kls);
 
   /**
-   * Makes a deep clone of this object, and transforms the cloned object into the specified
-   * type {@code kls}. See {@link #as} for more information about the conversion.
-   *
-   * <p>Properties that are marked with {@code @JsonIgnore} will not be cloned.
-   */
-  <T extends PipelineOptions> T cloneAs(Class<T> kls);
-
-  /**
    * The pipeline runner that will be used to execute the pipeline.
    * For registered runners, the class name can be specified, otherwise the fully
    * qualified name needs to be specified.
@@ -225,17 +220,17 @@ public interface PipelineOptions extends HasDisplayData {
   @Description("The pipeline runner that will be used to execute the pipeline. "
       + "For registered runners, the class name can be specified, otherwise the fully "
       + "qualified name needs to be specified.")
-  @Default.Class(DirectPipelineRunner.class)
+  @Default.InstanceFactory(DirectRunner.class)
   Class<? extends PipelineRunner<?>> getRunner();
   void setRunner(Class<? extends PipelineRunner<?>> kls);
 
   /**
    * Enumeration of the possible states for a given check.
    */
-  public static enum CheckEnabled {
+  enum CheckEnabled {
     OFF,
     WARNING,
-    ERROR;
+    ERROR
   }
 
   /**
@@ -262,4 +257,96 @@ public interface PipelineOptions extends HasDisplayData {
   @Description("A pipeline level default location for storing temporary files.")
   String getTempLocation();
   void setTempLocation(String value);
+
+  @Description("Name of the pipeline execution."
+      + "It must match the regular expression '[a-z]([-a-z0-9]{0,38}[a-z0-9])?'."
+      + "It defaults to ApplicationName-UserName-Date-RandomInteger")
+  @Default.InstanceFactory(JobNameFactory.class)
+  String getJobName();
+  void setJobName(String jobName);
+
+  /**
+   * A {@link DefaultValueFactory} that obtains the class of the {@code DirectRunner} if it exists
+   * on the classpath, and throws an exception otherwise.
+   *
+   * <p>As the {@code DirectRunner} is in an independent module, it cannot be directly referenced
+   * as the {@link Default}. However, it should still be used if available, and a user is required
+   * to explicitly set the {@code --runner} property if they wish to use an alternative runner.
+   */
+  class DirectRunner implements DefaultValueFactory<Class<? extends PipelineRunner<?>>> {
+    @Override
+    public Class<? extends PipelineRunner<?>> create(PipelineOptions options) {
+      try {
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        Class<? extends PipelineRunner<?>> direct =
+            (Class<? extends PipelineRunner<?>>)
+                Class.forName("org.apache.beam.runners.direct.DirectRunner");
+        return direct;
+      } catch (ClassNotFoundException e) {
+        throw new IllegalArgumentException(String.format(
+            "No Runner was specified and the DirectRunner was not found on the classpath.%n"
+                + "Specify a runner by either:%n"
+                + "    Explicitly specifying a runner by providing the 'runner' property%n"
+                + "    Adding the DirectRunner to the classpath%n"
+                + "    Calling 'PipelineOptions.setRunner(PipelineRunner)' directly"));
+      }
+    }
+  }
+
+  /**
+   * Returns a normalized job name constructed from {@link ApplicationNameOptions#getAppName()},
+   * the local system user name (if available), the current time, and a random integer.
+   *
+   * <p>The normalization makes sure that the name matches the pattern of
+   * [a-z]([-a-z0-9]*[a-z0-9])?.
+   */
+  class JobNameFactory implements DefaultValueFactory<String> {
+    private static final DateTimeFormatter FORMATTER =
+        DateTimeFormat.forPattern("MMddHHmmss").withZone(DateTimeZone.UTC);
+
+    @Override
+    public String create(PipelineOptions options) {
+      String appName = options.as(ApplicationNameOptions.class).getAppName();
+      String normalizedAppName = appName == null || appName.length() == 0 ? "BeamApp"
+          : appName.toLowerCase()
+                   .replaceAll("[^a-z0-9]", "0")
+                   .replaceAll("^[^a-z]", "a");
+      String userName = MoreObjects.firstNonNull(System.getProperty("user.name"), "");
+      String normalizedUserName = userName.toLowerCase()
+                                          .replaceAll("[^a-z0-9]", "0");
+      String datePart = FORMATTER.print(DateTimeUtils.currentTimeMillis());
+
+      String randomPart = Integer.toHexString(ThreadLocalRandom.current().nextInt());
+      return String.format("%s-%s-%s-%s",
+          normalizedAppName, normalizedUserName, datePart, randomPart);
+    }
+  }
+
+  /**
+   * Returns a map of properties which correspond to {@link ValueProvider.RuntimeValueProvider},
+   * keyed by the property name.  The value is a map containing type and default information.
+   */
+  Map<String, Map<String, Object>> outputRuntimeOptions();
+
+  /**
+   * Provides a unique ID for this {@link PipelineOptions} object, assigned at graph
+   * construction time.
+   */
+  @Hidden
+  @Default.InstanceFactory(AtomicLongFactory.class)
+  Long getOptionsId();
+  void setOptionsId(Long id);
+
+  /**
+   * {@link DefaultValueFactory} which supplies an ID that is guaranteed to be unique
+   * within the given process.
+   */
+  class AtomicLongFactory implements DefaultValueFactory<Long> {
+    private static final AtomicLong NEXT_ID = new AtomicLong(0);
+
+    @Override
+    public Long create(PipelineOptions options) {
+      return NEXT_ID.getAndIncrement();
+    }
+  }
 }

@@ -25,15 +25,6 @@ import static org.junit.Assert.assertTrue;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.Files;
 import com.google.common.io.LineReader;
-
-import org.hamcrest.Matchers;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.ExpectedException;
-import org.junit.rules.TemporaryFolder;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.Reader;
@@ -42,18 +33,38 @@ import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import org.hamcrest.Matchers;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.ExpectedException;
+import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /** Tests for {@link FileIOChannelFactory}. */
 @RunWith(JUnit4.class)
 public class FileIOChannelFactoryTest {
   @Rule public ExpectedException thrown = ExpectedException.none();
   @Rule public TemporaryFolder temporaryFolder = new TemporaryFolder();
-  private FileIOChannelFactory factory = new FileIOChannelFactory();
+  private FileIOChannelFactory factory = FileIOChannelFactory.fromOptions(null);
 
   private void testCreate(Path path) throws Exception {
     String expected = "my test string";
+    // First with the path string
     try (Writer writer = Channels.newWriter(
         factory.create(path.toString(), MimeTypes.TEXT), StandardCharsets.UTF_8.name())) {
+      writer.write(expected);
+    }
+    assertThat(
+        Files.readLines(path.toFile(), StandardCharsets.UTF_8),
+        containsInAnyOrder(expected));
+
+    // Delete the file before trying as URI
+    assertTrue("Unable to delete file " + path, path.toFile().delete());
+
+    // Second with the path URI
+    try (Writer writer = Channels.newWriter(
+        factory.create(path.toUri().toString(), MimeTypes.TEXT), StandardCharsets.UTF_8.name())) {
       writer.write(expected);
     }
     assertThat(
@@ -193,20 +204,33 @@ public class FileIOChannelFactoryTest {
   }
 
   @Test
+  public void testMatchWithoutParentDirectory() throws Exception {
+    String pattern = factory.resolve(
+        factory.resolve(temporaryFolder.getRoot().getPath(), "non_existing_dir"),
+        "*");
+    assertTrue(factory.match(pattern).isEmpty());
+  }
+
+  @Test
   public void testResolve() throws Exception {
-    String expected = temporaryFolder.getRoot().toPath().resolve("aa").toString();
-    assertEquals(expected, factory.resolve(temporaryFolder.getRoot().toString(), "aa"));
+    Path rootPath = temporaryFolder.getRoot().toPath();
+    String rootString = rootPath.toString();
+
+    String expected = rootPath.resolve("aa").toString();
+    assertEquals(expected, factory.resolve(rootString, "aa"));
+    assertEquals(expected, factory.resolve("file:" + rootString, "aa"));
+    assertEquals(expected, factory.resolve("file://" + rootString, "aa"));
   }
 
   @Test
   public void testResolveOtherIsFullPath() throws Exception {
-    String expected = temporaryFolder.getRoot().getPath().toString();
+    String expected = temporaryFolder.getRoot().getPath();
     assertEquals(expected, factory.resolve(expected, expected));
   }
 
   @Test
   public void testResolveOtherIsEmptyPath() throws Exception {
-    String expected = temporaryFolder.getRoot().getPath().toString();
+    String expected = temporaryFolder.getRoot().getPath();
     assertEquals(expected, factory.resolve(expected, ""));
   }
 

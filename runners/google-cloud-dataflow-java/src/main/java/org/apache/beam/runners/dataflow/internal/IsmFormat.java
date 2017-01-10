@@ -17,12 +17,25 @@
  */
 package org.apache.beam.runners.dataflow.internal;
 
-import static org.apache.beam.sdk.util.Structs.addLong;
-
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static org.apache.beam.sdk.util.Structs.addLong;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.auto.value.AutoValue;
+import com.google.common.collect.ImmutableList;
+import com.google.common.hash.HashFunction;
+import com.google.common.hash.Hashing;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
+import javax.annotation.Nullable;
 import org.apache.beam.runners.dataflow.util.RandomAccessData;
 import org.apache.beam.sdk.coders.AtomicCoder;
 import org.apache.beam.sdk.coders.ByteArrayCoder;
@@ -37,24 +50,6 @@ import org.apache.beam.sdk.util.CloudObject;
 import org.apache.beam.sdk.util.PropertyNames;
 import org.apache.beam.sdk.util.VarInt;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.auto.value.AutoValue;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableList;
-import com.google.common.hash.HashFunction;
-import com.google.common.hash.Hashing;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
-
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.List;
-import javax.annotation.Nullable;
 
 /**
  * An Ism file is a prefix encoded composite key value file broken into shards. Each composite
@@ -130,7 +125,7 @@ public class IsmFormat {
       checkArgument(!keyComponents.isEmpty(), "Expected non-empty list of key components.");
       checkArgument(!isMetadataKey(keyComponents),
           "Expected key components to not contain metadata key.");
-      return new AutoValue_IsmFormat_IsmRecord<V>(keyComponents, value, null);
+      return new AutoValue_IsmFormat_IsmRecord<>(keyComponents, value, null);
     }
 
     public static <V> IsmRecord<V> meta(List<?> keyComponents, byte[] metadata) {
@@ -138,7 +133,7 @@ public class IsmFormat {
       checkArgument(!keyComponents.isEmpty(), "Expected non-empty list of key components.");
       checkArgument(isMetadataKey(keyComponents),
           "Expected key components to contain metadata key.");
-      return new AutoValue_IsmFormat_IsmRecord<V>(keyComponents, null, metadata);
+      return new AutoValue_IsmFormat_IsmRecord<>(keyComponents, null, metadata);
     }
 
     /** Returns the list of key components. */
@@ -172,11 +167,12 @@ public class IsmFormat {
     }
   }
 
-  /** A {@link Coder} for {@link IsmRecord}s.
+  /**
+   * A {@link Coder} for {@link IsmRecord}s.
    *
    * <p>Note that this coder standalone will not produce an Ism file. This coder can be used
    * to materialize a {@link PCollection} of {@link IsmRecord}s. Only when this coder
-   * is combined with an {@link IsmSink} will one produce an Ism file.
+   * is combined with an {@code IsmSink} will one produce an Ism file.
    *
    * <p>The {@link IsmRecord} encoded format is:
    * <ul>
@@ -215,7 +211,7 @@ public class IsmFormat {
         @JsonProperty(PropertyNames.NUM_SHARD_CODERS) int numberOfShardCoders,
         @JsonProperty(PropertyNames.NUM_METADATA_SHARD_CODERS) int numberOfMetadataShardCoders,
         @JsonProperty(PropertyNames.COMPONENT_ENCODINGS) List<Coder<?>> components) {
-      Preconditions.checkArgument(components.size() >= 2,
+      checkArgument(components.size() >= 2,
           "Expecting at least 2 components, got " + components.size());
       return of(
           numberOfShardCoders,
@@ -245,8 +241,9 @@ public class IsmFormat {
     }
 
     /** Returns the key coder at the specified index. */
-    public Coder getKeyComponentCoder(int index) {
-      return keyComponentCoders.get(index);
+    @SuppressWarnings("unchecked")
+    public <T> Coder<T> getKeyComponentCoder(int index) {
+      return (Coder<T>) keyComponentCoders.get(index);
     }
 
     /** Returns the value coder. */
@@ -298,7 +295,7 @@ public class IsmFormat {
     /**
      * Computes the shard id for the given key component(s).
      *
-     * The shard keys are encoded into their byte representations and hashed using the
+     * <p>The shard keys are encoded into their byte representations and hashed using the
      * <a href="http://smhasher.googlecode.com/svn/trunk/MurmurHash3.cpp">
      * 32-bit murmur3 algorithm, x86 variant</a> (little-endian variant),
      * using {@code 1225801234} as the seed value. We ensure that shard ids for
@@ -311,7 +308,7 @@ public class IsmFormat {
     /**
      * Computes the shard id for the given key component(s).
      *
-     * Mutates {@code keyBytes} such that when returned, contains the encoded
+     * <p>Mutates {@code keyBytes} such that when returned, contains the encoded
      * version of the key components.
      */
     public <V, T> int encodeAndHash(List<?> keyComponents, RandomAccessData keyBytesToMutate) {
@@ -321,7 +318,7 @@ public class IsmFormat {
     /**
      * Computes the shard id for the given key component(s).
      *
-     * Mutates {@code keyBytes} such that when returned, contains the encoded
+     * <p>Mutates {@code keyBytes} such that when returned, contains the encoded
      * version of the key components. Also, mutates {@code keyComponentByteOffsetsToMutate} to
      * store the location where each key component's encoded byte representation ends within
      * {@code keyBytes}.
@@ -382,11 +379,11 @@ public class IsmFormat {
     }
 
     @Override
-    public CloudObject asCloudObject() {
-      CloudObject cloudObject = super.asCloudObject();
-      addLong(cloudObject, PropertyNames.NUM_SHARD_CODERS, numberOfShardKeyCoders);
-      addLong(cloudObject, PropertyNames.NUM_METADATA_SHARD_CODERS, numberOfMetadataShardKeyCoders);
-      return cloudObject;
+    protected CloudObject initializeCloudObject() {
+      CloudObject result = CloudObject.forClass(getClass());
+      addLong(result, PropertyNames.NUM_SHARD_CODERS, numberOfShardKeyCoders);
+      addLong(result, PropertyNames.NUM_METADATA_SHARD_CODERS, numberOfMetadataShardKeyCoders);
+      return result;
     }
 
     @Override
@@ -497,7 +494,7 @@ public class IsmFormat {
     @JsonCreator
     public static MetadataKeyCoder<?> of(
         @JsonProperty(PropertyNames.COMPONENT_ENCODINGS) List<Coder<?>> components) {
-      Preconditions.checkArgument(components.size() == 1,
+      checkArgument(components.size() == 1,
           "Expecting one component, got " + components.size());
       return of(components.get(0));
     }
@@ -623,7 +620,7 @@ public class IsmFormat {
   /**
    * A coder for {@link IsmShard}s.
    *
-   * The shard descriptor is encoded as:
+   * <p>The shard descriptor is encoded as:
    * <ul>
    *   <li>id (variable length integer encoding)</li>
    *   <li>blockOffset (variable length long encoding)</li>
@@ -650,15 +647,15 @@ public class IsmFormat {
           value);
       VarIntCoder.of().encode(value.getId(), outStream, context.nested());
       VarLongCoder.of().encode(value.getBlockOffset(), outStream, context.nested());
-      VarLongCoder.of().encode(value.getIndexOffset(), outStream, context.nested());
+      VarLongCoder.of().encode(value.getIndexOffset(), outStream, context);
     }
 
     @Override
     public IsmShard decode(
         InputStream inStream, Coder.Context context) throws CoderException, IOException {
       return IsmShard.of(
-          VarIntCoder.of().decode(inStream, context),
-          VarLongCoder.of().decode(inStream, context),
+          VarIntCoder.of().decode(inStream, context.nested()),
+          VarLongCoder.of().decode(inStream, context.nested()),
           VarLongCoder.of().decode(inStream, context));
     }
 
@@ -725,7 +722,7 @@ public class IsmFormat {
     @Override
     public long getEncodedElementByteSize(KeyPrefix value, Coder.Context context)
         throws Exception {
-      Preconditions.checkNotNull(value);
+      checkNotNull(value);
       return VarInt.getLength(value.getSharedKeySize())
           + VarInt.getLength(value.getUnsharedKeySize());
     }

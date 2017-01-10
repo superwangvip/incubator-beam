@@ -17,14 +17,10 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import org.apache.beam.sdk.transforms.Combine.BinaryCombineFn;
-import org.apache.beam.sdk.transforms.display.DisplayData;
-import org.apache.beam.sdk.util.common.Counter;
-import org.apache.beam.sdk.util.common.Counter.AggregationKind;
-import org.apache.beam.sdk.util.common.CounterProvider;
-
 import java.io.Serializable;
 import java.util.Comparator;
+import org.apache.beam.sdk.transforms.Combine.BinaryCombineFn;
+import org.apache.beam.sdk.transforms.display.DisplayData;
 
 /**
  * {@code PTransform}s for computing the minimum of the elements in a {@code PCollection}, or the
@@ -56,7 +52,7 @@ public class Min {
    * {@code PCollection}'s elements, or {@code Integer.MAX_VALUE} if there are no elements.
    */
   public static Combine.Globally<Integer, Integer> integersGlobally() {
-    return Combine.globally(new MinIntegerFn()).named("Min.Globally");
+    return Combine.globally(new MinIntegerFn());
   }
 
   /**
@@ -68,7 +64,7 @@ public class Min {
    * <p>See {@link Combine.PerKey} for how this affects timestamps and windowing.
    */
   public static <K> Combine.PerKey<K, Integer, Integer> integersPerKey() {
-    return Combine.<K, Integer, Integer>perKey(new MinIntegerFn()).named("Min.PerKey");
+    return Combine.<K, Integer, Integer>perKey(new MinIntegerFn());
   }
 
   /**
@@ -77,7 +73,7 @@ public class Min {
    * or {@code Long.MAX_VALUE} if there are no elements.
    */
   public static Combine.Globally<Long, Long> longsGlobally() {
-    return Combine.globally(new MinLongFn()).named("Min.Globally");
+    return Combine.globally(new MinLongFn());
   }
 
   /**
@@ -89,7 +85,7 @@ public class Min {
    * <p>See {@link Combine.PerKey} for how this affects timestamps and windowing.
    */
   public static <K> Combine.PerKey<K, Long, Long> longsPerKey() {
-   return Combine.<K, Long, Long>perKey(new MinLongFn()).named("Min.PerKey");
+   return Combine.<K, Long, Long>perKey(new MinLongFn());
   }
 
   /**
@@ -98,7 +94,7 @@ public class Min {
    * elements, or {@code Double.POSITIVE_INFINITY} if there are no elements.
    */
   public static Combine.Globally<Double, Double> doublesGlobally() {
-    return Combine.globally(new MinDoubleFn()).named("Min.Globally");
+    return Combine.globally(new MinDoubleFn());
   }
 
   /**
@@ -110,7 +106,63 @@ public class Min {
    * <p>See {@link Combine.PerKey} for how this affects timestamps and windowing.
    */
   public static <K> Combine.PerKey<K, Double, Double> doublesPerKey() {
-    return Combine.<K, Double, Double>perKey(new MinDoubleFn()).named("Min.PerKey");
+    return Combine.<K, Double, Double>perKey(new MinDoubleFn());
+  }
+
+  /**
+   * A {@code CombineFn} that computes the minimum of a collection of {@code Integer}s, useful as an
+   * argument to {@link Combine#globally} or {@link Combine#perKey}.
+   */
+  public static Combine.BinaryCombineIntegerFn ofIntegers() {
+    return new Min.MinIntegerFn();
+  }
+
+  /**
+   * A {@code CombineFn} that computes the minimum of a collection of {@code Long}s, useful as an
+   * argument to {@link Combine#globally} or {@link Combine#perKey}.
+   */
+  public static Combine.BinaryCombineLongFn ofLongs() {
+    return new Min.MinLongFn();
+  }
+
+  /**
+   * A {@code CombineFn} that computes the minimum of a collection of {@code Double}s, useful as an
+   * argument to {@link Combine#globally} or {@link Combine#perKey}.
+   */
+  public static Combine.BinaryCombineDoubleFn ofDoubles() {
+    return new Min.MinDoubleFn();
+  }
+
+  /**
+   * A {@code CombineFn} that computes the minimum of a collection of elements of type {@code T}
+   * using an arbitrary {@link Comparator} and an {@code identity},
+   * useful as an argument to {@link Combine#globally} or {@link Combine#perKey}.
+   *
+   * @param <T> the type of the values being compared
+   */
+  public static <T, ComparatorT extends Comparator<? super T> & Serializable>
+  BinaryCombineFn<T> of(T identity, ComparatorT comparator) {
+    return new MinFn<T>(identity, comparator);
+  }
+
+  /**
+   * A {@code CombineFn} that computes the minimum of a collection of elements of type {@code T}
+   * using an arbitrary {@link Comparator}, useful as an argument to {@link Combine#globally} or
+   * {@link Combine#perKey}.
+   *
+   * @param <T> the type of the values being compared
+   */
+  public static <T, ComparatorT extends Comparator<? super T> & Serializable>
+  BinaryCombineFn<T> of(ComparatorT comparator) {
+    return new MinFn<T>(null, comparator);
+  }
+
+  public static <T extends Comparable<? super T>> BinaryCombineFn<T> naturalOrder(T identity) {
+    return new MinFn<T>(identity, new Top.Largest<T>());
+  }
+
+  public static <T extends Comparable<? super T>> BinaryCombineFn<T> naturalOrder() {
+    return new MinFn<T>(null, new Top.Largest<T>());
   }
 
   /**
@@ -120,7 +172,7 @@ public class Min {
    */
   public static <T extends Comparable<? super T>>
   Combine.Globally<T, T> globally() {
-    return Combine.<T, T>globally(MinFn.<T>naturalOrder()).named("Min.Globally");
+    return Combine.<T, T>globally(Min.<T>naturalOrder());
   }
 
   /**
@@ -133,7 +185,7 @@ public class Min {
    */
   public static <K, T extends Comparable<? super T>>
   Combine.PerKey<K, T, T> perKey() {
-    return Combine.<K, T, T>perKey(MinFn.<T>naturalOrder()).named("Min.PerKey");
+    return Combine.<K, T, T>perKey(Min.<T>naturalOrder());
   }
 
   /**
@@ -143,7 +195,7 @@ public class Min {
    */
   public static <T, ComparatorT extends Comparator<? super T> & Serializable>
   Combine.Globally<T, T> globally(ComparatorT comparator) {
-    return Combine.<T, T>globally(MinFn.of(comparator)).named("Min.Globally");
+    return Combine.<T, T>globally(Min.<T, ComparatorT>of(comparator));
   }
 
   /**
@@ -155,19 +207,12 @@ public class Min {
    */
   public static <K, T, ComparatorT extends Comparator<? super T> & Serializable>
   Combine.PerKey<K, T, T> perKey(ComparatorT comparator) {
-    return Combine.<K, T, T>perKey(MinFn.of(comparator)).named("Min.PerKey");
+    return Combine.<K, T, T>perKey(Min.<T, ComparatorT>of(comparator));
   }
 
   /////////////////////////////////////////////////////////////////////////////
 
-  /**
-   * A {@code CombineFn} that computes the maximum of a collection of elements of type {@code T}
-   * using an arbitrary {@link Comparator}, useful as an argument to {@link Combine#globally} or
-   * {@link Combine#perKey}.
-   *
-   * @param <T> the type of the values being compared
-   */
-  public static class MinFn<T> extends BinaryCombineFn<T> {
+  private static class MinFn<T> extends BinaryCombineFn<T> {
 
     private final T identity;
     private final Comparator<? super T> comparator;
@@ -176,24 +221,6 @@ public class Min {
         T identity, ComparatorT comparator) {
       this.identity = identity;
       this.comparator = comparator;
-    }
-
-    public static <T, ComparatorT extends Comparator<? super T> & Serializable>
-    MinFn<T> of(T identity, ComparatorT comparator) {
-      return new MinFn<T>(identity, comparator);
-    }
-
-    public static <T, ComparatorT extends Comparator<? super T> & Serializable>
-    MinFn<T> of(ComparatorT comparator) {
-      return new MinFn<T>(null, comparator);
-    }
-
-    public static <T extends Comparable<? super T>> MinFn<T> naturalOrder(T identity) {
-      return new MinFn<T>(identity, new Top.Largest<T>());
-    }
-
-    public static <T extends Comparable<? super T>> MinFn<T> naturalOrder() {
-      return new MinFn<T>(null, new Top.Largest<T>());
     }
 
     @Override
@@ -209,55 +236,47 @@ public class Min {
     @Override
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
-      builder.add(DisplayData.item("comparer", comparator.getClass()));
+      builder.add(DisplayData.item("comparer", comparator.getClass())
+        .withLabel("Record Comparer"));
     }
   }
 
-  /**
-   * A {@code CombineFn} that computes the minimum of a collection of {@code Integer}s, useful as an
-   * argument to {@link Combine#globally} or {@link Combine#perKey}.
-   */
-  public static class MinIntegerFn extends MinFn<Integer> implements
-      CounterProvider<Integer> {
-    public MinIntegerFn() {
-      super(Integer.MAX_VALUE, new Top.Largest<Integer>());
+  private static class MinIntegerFn extends Combine.BinaryCombineIntegerFn {
+
+    @Override
+    public int apply(int left, int right) {
+      return left <= right ? left : right;
     }
 
     @Override
-    public Counter<Integer> getCounter(String name) {
-      return Counter.ints(name, AggregationKind.MIN);
+    public int identity() {
+      return Integer.MAX_VALUE;
     }
   }
 
-  /**
-   * A {@code CombineFn} that computes the minimum of a collection of {@code Long}s, useful as an
-   * argument to {@link Combine#globally} or {@link Combine#perKey}.
-   */
-  public static class MinLongFn extends MinFn<Long> implements
-      CounterProvider<Long> {
-    public MinLongFn() {
-      super(Long.MAX_VALUE, new Top.Largest<Long>());
+  private static class MinLongFn extends Combine.BinaryCombineLongFn {
+
+    @Override
+    public long apply(long left, long right) {
+      return left <= right ? left : right;
     }
 
     @Override
-    public Counter<Long> getCounter(String name) {
-      return Counter.longs(name, AggregationKind.MIN);
+    public long identity() {
+      return Long.MAX_VALUE;
     }
   }
 
-  /**
-   * A {@code CombineFn} that computes the minimum of a collection of {@code Double}s, useful as an
-   * argument to {@link Combine#globally} or {@link Combine#perKey}.
-   */
-  public static class MinDoubleFn extends MinFn<Double> implements
-      CounterProvider<Double> {
-    public MinDoubleFn() {
-      super(Double.POSITIVE_INFINITY, new Top.Largest<Double>());
+  private static class MinDoubleFn extends Combine.BinaryCombineDoubleFn {
+
+    @Override
+    public double apply(double left, double right) {
+      return left <= right ? left : right;
     }
 
     @Override
-    public Counter<Double> getCounter(String name) {
-      return Counter.doubles(name, AggregationKind.MIN);
+    public double identity() {
+      return Double.POSITIVE_INFINITY;
     }
   }
 }

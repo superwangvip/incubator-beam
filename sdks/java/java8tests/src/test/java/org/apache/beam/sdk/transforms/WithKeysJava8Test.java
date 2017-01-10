@@ -17,14 +17,14 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import org.apache.beam.sdk.Pipeline.PipelineExecutionException;
+import static org.hamcrest.Matchers.containsString;
+
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TypeDescriptor;
-
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -39,12 +39,15 @@ import org.junit.runners.JUnit4;
 public class WithKeysJava8Test {
 
   @Rule
+  public final transient TestPipeline p = TestPipeline.create();
+
+  @Rule
   public ExpectedException thrown = ExpectedException.none();
 
   @Test
   @Category(RunnableOnService.class)
   public void withLambdaAndTypeDescriptorShouldSucceed() {
-    TestPipeline p = TestPipeline.create();
+
 
     PCollection<String> values = p.apply(Create.of("1234", "3210", "0", "-12"));
     PCollection<KV<Integer, String>> kvs = values.apply(
@@ -59,16 +62,20 @@ public class WithKeysJava8Test {
 
   @Test
   public void withLambdaAndNoTypeDescriptorShouldThrow() {
-    TestPipeline p = TestPipeline.create();
 
     PCollection<String> values = p.apply(Create.of("1234", "3210", "0", "-12"));
 
     values.apply("ApplyKeysWithWithKeys", WithKeys.of((String s) -> Integer.valueOf(s)));
 
-    thrown.expect(PipelineExecutionException.class);
+    thrown.expect(IllegalStateException.class);
     thrown.expectMessage("Unable to return a default Coder for ApplyKeysWithWithKeys");
-    thrown.expectMessage("Cannot provide a coder for type variable K");
-    thrown.expectMessage("the actual type is unknown due to erasure.");
+    thrown.expectMessage("No Coder has been manually specified");
+    thrown.expectMessage(
+        containsString("Building a Coder using a registered CoderFactory failed"));
+    thrown.expectMessage(
+        containsString("Building a Coder from the @DefaultCoder annotation failed"));
+    thrown.expectMessage(
+        containsString("Building a Coder from the fallback CoderProvider failed"));
 
     p.run();
   }

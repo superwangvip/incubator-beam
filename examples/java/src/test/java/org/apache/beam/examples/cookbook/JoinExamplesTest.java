@@ -17,9 +17,11 @@
  */
 package org.apache.beam.examples.cookbook;
 
+import com.google.api.services.bigquery.model.TableRow;
+import java.util.Arrays;
+import java.util.List;
 import org.apache.beam.examples.cookbook.JoinExamples.ExtractCountryInfoFn;
 import org.apache.beam.examples.cookbook.JoinExamples.ExtractEventDataFn;
-import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -27,18 +29,13 @@ import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFnTester;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.api.services.bigquery.model.TableRow;
-
 import org.hamcrest.CoreMatchers;
 import org.junit.Assert;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.List;
 
 /** Unit tests for {@link JoinExamples}. */
 @RunWith(JUnit4.class)
@@ -83,20 +80,23 @@ public class JoinExamplesTest {
           + "url: http://cnn.com"
     };
 
+  @Rule
+  public TestPipeline p = TestPipeline.create();
+
   @Test
-  public void testExtractEventDataFn() {
+  public void testExtractEventDataFn() throws Exception {
     DoFnTester<TableRow, KV<String, String>> extractEventDataFn =
         DoFnTester.of(new ExtractEventDataFn());
-    List<KV<String, String>> results = extractEventDataFn.processBatch(EVENTS);
+    List<KV<String, String>> results = extractEventDataFn.processBundle(EVENTS);
     Assert.assertThat(results, CoreMatchers.hasItem(kv1));
     Assert.assertThat(results, CoreMatchers.hasItem(kv2));
   }
 
   @Test
-  public void testExtractCountryInfoFn() {
+  public void testExtractCountryInfoFn() throws Exception {
     DoFnTester<TableRow, KV<String, String>> extractCountryInfoFn =
         DoFnTester.of(new ExtractCountryInfoFn());
-    List<KV<String, String>> results = extractCountryInfoFn.processBatch(CCS);
+    List<KV<String, String>> results = extractCountryInfoFn.processBundle(CCS);
     Assert.assertThat(results, CoreMatchers.hasItem(kv3));
     Assert.assertThat(results, CoreMatchers.hasItem(kv4));
   }
@@ -105,12 +105,11 @@ public class JoinExamplesTest {
   @Test
   @Category(RunnableOnService.class)
   public void testJoin() throws java.lang.Exception {
-    Pipeline p = TestPipeline.create();
     PCollection<TableRow> input1 = p.apply("CreateEvent", Create.of(EVENT_ARRAY));
     PCollection<TableRow> input2 = p.apply("CreateCC", Create.of(CC_ARRAY));
 
     PCollection<String> output = JoinExamples.joinEvents(input1, input2);
     PAssert.that(output).containsInAnyOrder(JOINED_EVENTS);
-    p.run();
+    p.run().waitUntilFinish();
   }
 }

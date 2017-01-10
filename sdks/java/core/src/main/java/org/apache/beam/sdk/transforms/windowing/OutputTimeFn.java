@@ -17,14 +17,11 @@
  */
 package org.apache.beam.sdk.transforms.windowing;
 
-import org.apache.beam.sdk.annotations.Experimental;
-
 import com.google.common.collect.Ordering;
-
-import org.joda.time.Instant;
-
 import java.io.Serializable;
 import java.util.Objects;
+import org.apache.beam.sdk.annotations.Experimental;
+import org.joda.time.Instant;
 
 /**
  * <b><i>(Experimental)</i></b> A function from timestamps of input values to the timestamp for a
@@ -52,10 +49,7 @@ import java.util.Objects;
 @Experimental(Experimental.Kind.OUTPUT_TIME)
 public abstract class OutputTimeFn<W extends BoundedWindow> implements Serializable {
 
-  /**
-   * Private constructor to prevent subclassing other than provided base classes.
-   */
-  private OutputTimeFn() { }
+  protected OutputTimeFn() { }
 
   /**
    * Returns the output timestamp to use for data depending on the given
@@ -179,11 +173,11 @@ public abstract class OutputTimeFn<W extends BoundedWindow> implements Serializa
     /**
      * {@inheritDoc}
      *
-     * @return {@code false}. An {@link OutputTimeFn} that depends only on the window should extend
-     * {@link OutputTimeFn.DependsOnlyOnWindow}.
+     * @return {@code false} by default. An {@link OutputTimeFn} that is known to depend only on the
+     * window should extend {@link OutputTimeFn.DependsOnlyOnWindow}.
      */
     @Override
-    public final boolean dependsOnlyOnWindow() {
+    public boolean dependsOnlyOnWindow() {
       return false;
     }
 

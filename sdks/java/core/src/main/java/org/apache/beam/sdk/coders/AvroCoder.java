@@ -19,12 +19,24 @@ package org.apache.beam.sdk.coders;
 
 import static org.apache.beam.sdk.util.Structs.addString;
 
-import org.apache.beam.sdk.util.CloudObject;
-import org.apache.beam.sdk.values.TypeDescriptor;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
+import com.google.common.base.Supplier;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectStreamException;
+import java.io.OutputStream;
+import java.io.Serializable;
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import javax.annotation.Nullable;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericDatumWriter;
@@ -46,22 +58,8 @@ import org.apache.avro.reflect.Union;
 import org.apache.avro.specific.SpecificData;
 import org.apache.avro.util.ClassUtils;
 import org.apache.avro.util.Utf8;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.Serializable;
-import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.SortedMap;
-import java.util.SortedSet;
-
-import javax.annotation.Nullable;
+import org.apache.beam.sdk.util.CloudObject;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link Coder} using Avro binary format.
@@ -168,41 +166,97 @@ public class AvroCoder<T> extends StandardCoder<T> {
   };
 
   private final Class<T> type;
-  private final Schema schema;
+  private final SerializableSchemaSupplier schemaSupplier;
+  private final TypeDescriptor<T> typeDescriptor;
 
   private final List<String> nonDeterministicReasons;
 
   // Factories allocated by .get() are thread-safe and immutable.
   private static final EncoderFactory ENCODER_FACTORY = EncoderFactory.get();
   private static final DecoderFactory DECODER_FACTORY = DecoderFactory.get();
+
+  /**
+   * A {@link Serializable} {@link ThreadLocal} which discards any "stored" objects. This allows
+   * for Kryo to serialize an {@link AvroCoder} as a final field.
+   */
+  private static class EmptyOnDeserializationThreadLocal<T>
+      extends ThreadLocal<T> implements Serializable {
+    private void writeObject(java.io.ObjectOutputStream out) throws IOException {
+    }
+
+    private void readObject(java.io.ObjectInputStream in)
+        throws IOException, ClassNotFoundException {
+    }
+
+    private void readObjectNoData() throws ObjectStreamException {
+    }
+  }
+
+  /**
+   * A {@link Serializable} object that holds the {@link String} version of a {@link Schema}.
+   * This is paired with the {@link SerializableSchemaSupplier} via {@link Serializable}'s usage
+   * of the {@link #readResolve} method.
+   */
+  private static class SerializableSchemaString implements Serializable {
+    private final String schema;
+    private SerializableSchemaString(String schema) {
+      this.schema = schema;
+    }
+
+    private Object readResolve() throws IOException, ClassNotFoundException {
+      return new SerializableSchemaSupplier(Schema.parse(schema));
+    }
+  }
+
+  /**
+   * A {@link Serializable} object that delegates to the {@link SerializableSchemaString} via
+   * {@link Serializable}'s usage of the {@link #writeReplace} method. Kryo doesn't utilize
+   * Java's serialization and hence is able to encode the {@link Schema} object directly.
+   */
+  private static class SerializableSchemaSupplier implements Serializable, Supplier<Schema> {
+    private final Schema schema;
+    private SerializableSchemaSupplier(Schema schema) {
+      this.schema = schema;
+    }
+
+    private Object writeReplace() {
+      return new SerializableSchemaString(schema.toString());
+    }
+
+    @Override
+    public Schema get() {
+      return schema;
+    }
+  }
+
   // Cache the old encoder/decoder and let the factories reuse them when possible. To be threadsafe,
   // these are ThreadLocal. This code does not need to be re-entrant as AvroCoder does not use
   // an inner coder.
-  private final ThreadLocal<BinaryDecoder> decoder;
-  private final ThreadLocal<BinaryEncoder> encoder;
-  private final ThreadLocal<DatumWriter<T>> writer;
-  private final ThreadLocal<DatumReader<T>> reader;
+  private final EmptyOnDeserializationThreadLocal<BinaryDecoder> decoder;
+  private final EmptyOnDeserializationThreadLocal<BinaryEncoder> encoder;
+  private final EmptyOnDeserializationThreadLocal<DatumWriter<T>> writer;
+  private final EmptyOnDeserializationThreadLocal<DatumReader<T>> reader;
 
   protected AvroCoder(Class<T> type, Schema schema) {
     this.type = type;
-    this.schema = schema;
-
+    this.schemaSupplier = new SerializableSchemaSupplier(schema);
+    typeDescriptor = TypeDescriptor.of(type);
     nonDeterministicReasons = new AvroDeterminismChecker().check(TypeDescriptor.of(type), schema);
 
     // Decoder and Encoder start off null for each thread. They are allocated and potentially
     // reused inside encode/decode.
-    this.decoder = new ThreadLocal<>();
-    this.encoder = new ThreadLocal<>();
+    this.decoder = new EmptyOnDeserializationThreadLocal<>();
+    this.encoder = new EmptyOnDeserializationThreadLocal<>();
 
     // Reader and writer are allocated once per thread and are "final" for thread-local Coder
     // instance.
-    this.reader = new ThreadLocal<DatumReader<T>>() {
+    this.reader = new EmptyOnDeserializationThreadLocal<DatumReader<T>>() {
       @Override
       public DatumReader<T> initialValue() {
         return createDatumReader();
       }
     };
-    this.writer = new ThreadLocal<DatumWriter<T>>() {
+    this.writer = new EmptyOnDeserializationThreadLocal<DatumWriter<T>>() {
       @Override
       public DatumWriter<T> initialValue() {
         return createDatumWriter();
@@ -250,12 +304,6 @@ public class AvroCoder<T> extends StandardCoder<T> {
     return type;
   }
 
-  private Object writeReplace() {
-    // When serialized by Java, instances of AvroCoder should be replaced by
-    // a SerializedAvroCoderProxy.
-    return new SerializedAvroCoderProxy<>(type, schema.toString());
-  }
-
   @Override
   public void encode(T value, OutputStream outStream, Context context) throws IOException {
     // Get a BinaryEncoder instance from the ThreadLocal cache and attempt to reuse it.
@@ -276,15 +324,15 @@ public class AvroCoder<T> extends StandardCoder<T> {
   }
 
   @Override
-    public List<? extends Coder<?>> getCoderArguments() {
+  public List<? extends Coder<?>> getCoderArguments() {
     return null;
   }
 
   @Override
-  public CloudObject asCloudObject() {
-    CloudObject result = super.asCloudObject();
+  protected CloudObject initializeCloudObject() {
+    CloudObject result = CloudObject.forClass(getClass());
     addString(result, "type", type.getName());
-    addString(result, "schema", schema.toString());
+    addString(result, "schema", schemaSupplier.get().toString());
     return result;
   }
 
@@ -310,9 +358,9 @@ public class AvroCoder<T> extends StandardCoder<T> {
   @Deprecated
   public DatumReader<T> createDatumReader() {
     if (type.equals(GenericRecord.class)) {
-      return new GenericDatumReader<>(schema);
+      return new GenericDatumReader<>(schemaSupplier.get());
     } else {
-      return new ReflectDatumReader<>(schema);
+      return new ReflectDatumReader<>(schemaSupplier.get());
     }
   }
 
@@ -325,9 +373,9 @@ public class AvroCoder<T> extends StandardCoder<T> {
   @Deprecated
   public DatumWriter<T> createDatumWriter() {
     if (type.equals(GenericRecord.class)) {
-      return new GenericDatumWriter<>(schema);
+      return new GenericDatumWriter<>(schemaSupplier.get());
     } else {
-      return new ReflectDatumWriter<>(schema);
+      return new ReflectDatumWriter<>(schemaSupplier.get());
     }
   }
 
@@ -335,28 +383,12 @@ public class AvroCoder<T> extends StandardCoder<T> {
    * Returns the schema used by this coder.
    */
   public Schema getSchema() {
-    return schema;
+    return schemaSupplier.get();
   }
 
-  /**
-   * Proxy to use in place of serializing the {@link AvroCoder}. This allows the fields
-   * to remain final.
-   */
-  private static class SerializedAvroCoderProxy<T> implements Serializable {
-    private final Class<T> type;
-    private final String schemaStr;
-
-    public SerializedAvroCoderProxy(Class<T> type, String schemaStr) {
-      this.type = type;
-      this.schemaStr = schemaStr;
-    }
-
-    private Object readResolve() {
-      // When deserialized, instances of this object should be replaced by
-      // constructing an AvroCoder.
-      Schema.Parser parser = new Schema.Parser();
-      return new AvroCoder<T>(type, parser.parse(schemaStr));
-    }
+  @Override
+  public TypeDescriptor<T> getEncodedTypeDescriptor() {
+    return typeDescriptor;
   }
 
   /**
@@ -475,6 +507,10 @@ public class AvroCoder<T> extends StandardCoder<T> {
           checkMap(context, type, schema);
           break;
         case RECORD:
+          if (!(type.getType() instanceof Class)) {
+            reportError(context, "Cannot determine type from generic %s due to erasure", type);
+            return;
+          }
           checkRecord(type, schema);
           break;
         case UNION:
@@ -681,7 +717,7 @@ public class AvroCoder<T> extends StandardCoder<T> {
       } else {
         // If it was an unknown type encoded as an array, be conservative and assume
         // that we don't know anything about the order.
-        reportError(context, "encoding %s as an ARRAY was unexpected");
+        reportError(context, "encoding %s as an ARRAY was unexpected", type);
         return;
       }
 
@@ -695,7 +731,8 @@ public class AvroCoder<T> extends StandardCoder<T> {
      * Extract a field from a class. We need to look at the declared fields so that we can
      * see private fields. We may need to walk up to the parent to get classes from the parent.
      */
-    private static Field getField(Class<?> clazz, String name) {
+    private static Field getField(Class<?> originalClazz, String name) {
+      Class<?> clazz = originalClazz;
       while (clazz != null) {
         for (Field field : clazz.getDeclaredFields()) {
           AvroName avroName = field.getAnnotation(AvroName.class);
@@ -708,8 +745,7 @@ public class AvroCoder<T> extends StandardCoder<T> {
         clazz = clazz.getSuperclass();
       }
 
-      throw new IllegalArgumentException(
-          "Unable to get field " + name + " from class " + clazz);
+      throw new IllegalArgumentException("Unable to get field " + name + " from " + originalClazz);
     }
   }
 }

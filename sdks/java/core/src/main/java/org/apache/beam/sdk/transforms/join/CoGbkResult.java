@@ -17,8 +17,22 @@
  */
 package org.apache.beam.sdk.transforms.join;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.beam.sdk.util.Structs.addObject;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterators;
+import com.google.common.collect.Lists;
+import com.google.common.collect.PeekingIterator;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Objects;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.CoderException;
 import org.apache.beam.sdk.coders.IterableCoder;
@@ -29,25 +43,8 @@ import org.apache.beam.sdk.util.common.Reiterator;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
-
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Iterators;
-import com.google.common.collect.PeekingIterator;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Objects;
 
 /**
  * A row result of a {@link CoGroupByKey}.  This is a tuple of {@link Iterable}s produced for
@@ -106,8 +103,8 @@ public class CoGbkResult {
       // schema.
       int unionTag = value.getUnionTag();
       if (schema.size() <= unionTag) {
-        throw new IllegalStateException("union tag " + unionTag +
-            " has no corresponding tuple tag in the result schema");
+        throw new IllegalStateException("union tag " + unionTag
+            + " has no corresponding tuple tag in the result schema");
       }
       List<Object> valueList = (List<Object>) valueMap.get(unionTag);
       valueList.add(value.getValue());
@@ -181,8 +178,8 @@ public class CoGbkResult {
   public <V> Iterable<V> getAll(TupleTag<V> tag) {
     int index = schema.getIndex(tag);
     if (index < 0) {
-      throw new IllegalArgumentException("TupleTag " + tag +
-          " is not in the schema");
+      throw new IllegalArgumentException("TupleTag " + tag
+          + " is not in the schema");
     }
     @SuppressWarnings("unchecked")
     Iterable<V> unions = (Iterable<V>) valueMap.get(index);
@@ -233,8 +230,7 @@ public class CoGbkResult {
         @JsonProperty(PropertyNames.COMPONENT_ENCODINGS)
         List<Coder<?>> components,
         @JsonProperty(PropertyNames.CO_GBK_RESULT_SCHEMA) CoGbkResultSchema schema) {
-      Preconditions.checkArgument(components.size() == 1,
-          "Expecting 1 component, got " + components.size());
+      checkArgument(components.size() == 1, "Expecting 1 component, got %s", components.size());
       return new CoGbkResultCoder(schema, (UnionCoder) components.get(0));
     }
 
@@ -245,20 +241,14 @@ public class CoGbkResult {
       this.unionCoder = unionCoder;
     }
 
-
     @Override
     public List<? extends Coder<?>> getCoderArguments() {
-      return null;
+      return ImmutableList.of(unionCoder);
     }
 
     @Override
-    public List<? extends Coder<?>> getComponents() {
-      return Arrays.<Coder<?>>asList(unionCoder);
-    }
-
-    @Override
-    public CloudObject asCloudObject() {
-      CloudObject result = super.asCloudObject();
+    public CloudObject initializeCloudObject() {
+      CloudObject result = CloudObject.forClass(getClass());
       addObject(result, PropertyNames.CO_GBK_RESULT_SCHEMA, schema.asCloudObject());
       return result;
     }
@@ -273,9 +263,14 @@ public class CoGbkResult {
       if (!schema.equals(value.getSchema())) {
         throw new CoderException("input schema does not match coder schema");
       }
-      for (int unionTag = 0; unionTag < schema.size(); unionTag++) {
-        tagListCoder(unionTag).encode(value.valueMap.get(unionTag), outStream, Context.NESTED);
+      if (schema.size() == 0) {
+        return;
       }
+      int lastIndex = schema.size() - 1;
+      for (int unionTag = 0; unionTag < lastIndex; unionTag++) {
+        tagListCoder(unionTag).encode(value.valueMap.get(unionTag), outStream, context.nested());
+      }
+      tagListCoder(lastIndex).encode(value.valueMap.get(lastIndex), outStream, context);
     }
 
     @Override
@@ -283,10 +278,15 @@ public class CoGbkResult {
         InputStream inStream,
         Context context)
         throws CoderException, IOException {
-      List<Iterable<?>> valueMap = new ArrayList<>();
-      for (int unionTag = 0; unionTag < schema.size(); unionTag++) {
-        valueMap.add(tagListCoder(unionTag).decode(inStream, Context.NESTED));
+      if (schema.size() == 0) {
+        return new CoGbkResult(schema, ImmutableList.<Iterable<?>>of());
       }
+      int lastIndex = schema.size() - 1;
+      List<Iterable<?>> valueMap = Lists.newArrayListWithExpectedSize(schema.size());
+      for (int unionTag = 0; unionTag < lastIndex; unionTag++) {
+        valueMap.add(tagListCoder(unionTag).decode(inStream, context.nested()));
+      }
+      valueMap.add(tagListCoder(lastIndex).decode(inStream, context));
       return new CoGbkResult(schema, valueMap);
     }
 
@@ -422,7 +422,7 @@ public class CoGbkResult {
 
     @Override
     public boolean hasNext() {
-      if (containsTag[tag] == Boolean.FALSE) {
+      if (Boolean.FALSE.equals(containsTag[tag])) {
         return false;
       }
       advance();

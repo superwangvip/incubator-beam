@@ -17,21 +17,28 @@
  */
 package org.apache.beam.runners.flink.translation;
 
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.transforms.AppliedPTransform;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.values.PInput;
-import org.apache.beam.sdk.values.POutput;
-import org.apache.beam.sdk.values.PValue;
-
-import com.google.common.base.Preconditions;
-
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.HashMap;
 import java.util.Map;
+import org.apache.beam.runners.flink.translation.types.CoderTypeInformation;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.transforms.AppliedPTransform;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PInput;
+import org.apache.beam.sdk.values.POutput;
+import org.apache.beam.sdk.values.PValue;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
+/**
+ * Helper for keeping track of which {@link DataStream DataStreams} map
+ * to which {@link PTransform PTransforms}.
+ */
 public class FlinkStreamingTranslationContext {
 
   private final StreamExecutionEnvironment env;
@@ -47,8 +54,8 @@ public class FlinkStreamingTranslationContext {
   private AppliedPTransform<?, ?, ?> currentTransform;
 
   public FlinkStreamingTranslationContext(StreamExecutionEnvironment env, PipelineOptions options) {
-    this.env = Preconditions.checkNotNull(env);
-    this.options = Preconditions.checkNotNull(options);
+    this.env = checkNotNull(env);
+    this.options = checkNotNull(options);
     this.dataStreams = new HashMap<>();
   }
 
@@ -80,12 +87,24 @@ public class FlinkStreamingTranslationContext {
   }
 
   @SuppressWarnings("unchecked")
-  public <I extends PInput> I getInput(PTransform<I, ?> transform) {
-    return (I) currentTransform.getInput();
+  public <T> TypeInformation<WindowedValue<T>> getTypeInfo(PCollection<T> collection) {
+    Coder<T> valueCoder = collection.getCoder();
+    WindowedValue.FullWindowedValueCoder<T> windowedValueCoder =
+        WindowedValue.getFullCoder(
+            valueCoder,
+            collection.getWindowingStrategy().getWindowFn().windowCoder());
+
+    return new CoderTypeInformation<>(windowedValueCoder);
+  }
+
+
+  @SuppressWarnings("unchecked")
+  public <T extends PInput> T getInput(PTransform<T, ?> transform) {
+    return (T) currentTransform.getInput();
   }
 
   @SuppressWarnings("unchecked")
-  public <O extends POutput> O getOutput(PTransform<?, O> transform) {
-    return (O) currentTransform.getOutput();
+  public <T extends POutput> T getOutput(PTransform<?, T> transform) {
+    return (T) currentTransform.getOutput();
   }
 }

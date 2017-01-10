@@ -17,6 +17,10 @@
  */
 package org.apache.beam.runners.flink.streaming;
 
+import com.google.api.services.bigquery.model.TableRow;
+import com.google.common.base.Joiner;
+import java.io.Serializable;
+import java.util.Arrays;
 import org.apache.beam.runners.flink.FlinkTestPipeline;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
@@ -28,20 +32,13 @@ import org.apache.beam.sdk.transforms.windowing.Sessions;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.api.services.bigquery.model.TableRow;
-import com.google.common.base.Joiner;
-
 import org.apache.flink.streaming.util.StreamingProgramTestBase;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 
-import java.io.Serializable;
-import java.util.Arrays;
-
 
 /**
- * Session window test
+ * Session window test.
  */
 public class TopWikipediaSessionsITCase extends StreamingProgramTestBase implements Serializable {
   protected String resultPath;
@@ -104,7 +101,7 @@ public class TopWikipediaSessionsITCase extends StreamingProgramTestBase impleme
 
 
       .apply(ParDo.of(new DoFn<TableRow, String>() {
-        @Override
+        @ProcessElement
         public void processElement(ProcessContext c) throws Exception {
           TableRow row = c.element();
           long timestamp = (Integer) row.get("timestamp");
@@ -121,7 +118,7 @@ public class TopWikipediaSessionsITCase extends StreamingProgramTestBase impleme
       .apply(Count.<String>perElement());
 
     PCollection<String> format = output.apply(ParDo.of(new DoFn<KV<String, Long>, String>() {
-      @Override
+      @ProcessElement
       public void processElement(ProcessContext c) throws Exception {
         KV<String, Long> el = c.element();
         String out = "user: " + el.getKey() + " value:" + el.getValue();

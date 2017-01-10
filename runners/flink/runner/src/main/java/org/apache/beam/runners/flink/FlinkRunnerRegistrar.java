@@ -18,33 +18,40 @@
 
 package org.apache.beam.runners.flink;
 
+import com.google.auto.service.AutoService;
+import com.google.common.collect.ImmutableList;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsRegistrar;
 import org.apache.beam.sdk.runners.PipelineRunner;
 import org.apache.beam.sdk.runners.PipelineRunnerRegistrar;
 
-import com.google.auto.service.AutoService;
-import com.google.common.collect.ImmutableList;
-
 
 /**
- * AuteService registrar - will register FlinkRunner and FlinkOptions
+ * AutoService registrar - will register FlinkRunner and FlinkOptions
  * as possible pipeline runner services.
  *
- * It ends up in META-INF/services and gets picked up by Dataflow.
+ * <p>It ends up in META-INF/services and gets picked up by Beam.
  *
  */
 public class FlinkRunnerRegistrar {
   private FlinkRunnerRegistrar() { }
 
+  /**
+   * Pipeline runner registrar.
+   */
   @AutoService(PipelineRunnerRegistrar.class)
   public static class Runner implements PipelineRunnerRegistrar {
     @Override
     public Iterable<Class<? extends PipelineRunner<?>>> getPipelineRunners() {
-      return ImmutableList.<Class<? extends PipelineRunner<?>>>of(FlinkPipelineRunner.class);
+      return ImmutableList.<Class<? extends PipelineRunner<?>>>of(
+          FlinkRunner.class,
+          TestFlinkRunner.class);
     }
   }
 
+  /**
+   * Pipeline options registrar.
+   */
   @AutoService(PipelineOptionsRegistrar.class)
   public static class Options implements PipelineOptionsRegistrar {
     @Override

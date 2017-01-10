@@ -17,12 +17,19 @@
  */
 package org.apache.beam.runners.direct;
 
+import static org.apache.beam.runners.core.WindowMatchers.isSingleWindowedValue;
+import static org.apache.beam.runners.core.WindowMatchers.isWindowedValue;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.junit.Assert.assertThat;
 import static org.mockito.Mockito.when;
 
-import org.apache.beam.runners.direct.InProcessPipelineRunner.CommittedBundle;
-import org.apache.beam.runners.direct.InProcessPipelineRunner.UncommittedBundle;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
+import java.util.Collection;
+import java.util.Collections;
+import org.apache.beam.runners.direct.DirectRunner.CommittedBundle;
+import org.apache.beam.runners.direct.DirectRunner.UncommittedBundle;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.AppliedPTransform;
@@ -41,23 +48,16 @@ import org.apache.beam.sdk.transforms.windowing.Window.Bound;
 import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
-
 import org.hamcrest.Matchers;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-
-import java.util.Collection;
-import java.util.Collections;
 
 /**
  * Tests for {@link WindowEvaluatorFactory}.
@@ -69,35 +69,44 @@ public class WindowEvaluatorFactoryTest {
   private PCollection<Long> input;
   private WindowEvaluatorFactory factory;
 
-  @Mock private InProcessEvaluationContext evaluationContext;
+  @Mock private EvaluationContext evaluationContext;
 
   private BundleFactory bundleFactory;
 
-  private WindowedValue<Long> first =
+  private WindowedValue<Long> valueInGlobalWindow =
       WindowedValue.timestampedValueInGlobalWindow(3L, new Instant(2L));
-  private WindowedValue<Long> second =
-      WindowedValue.of(Long.valueOf(1L),
-          EPOCH.plus(Duration.standardDays(3)),
-          ImmutableList.of(GlobalWindow.INSTANCE,
-              new IntervalWindow(EPOCH, BoundedWindow.TIMESTAMP_MAX_VALUE),
-              new IntervalWindow(EPOCH.plus(Duration.standardDays(3)),
-                  EPOCH.plus(Duration.standardDays(6)))),
-          PaneInfo.NO_FIRING);
-  private WindowedValue<Long> third =
+
+  private WindowedValue<Long> valueInIntervalWindow =
       WindowedValue.of(
           Long.valueOf(2L),
           new Instant(-10L),
           new IntervalWindow(new Instant(-100), EPOCH),
           PaneInfo.NO_FIRING);
 
+  private IntervalWindow intervalWindow1 =
+      new IntervalWindow(EPOCH, BoundedWindow.TIMESTAMP_MAX_VALUE);
+
+  private IntervalWindow intervalWindow2 =
+      new IntervalWindow(
+          EPOCH.plus(Duration.standardDays(3)), EPOCH.plus(Duration.standardDays(6)));
+
+  private WindowedValue<Long> valueInGlobalAndTwoIntervalWindows =
+      WindowedValue.of(
+          Long.valueOf(1L),
+          EPOCH.plus(Duration.standardDays(3)),
+          ImmutableList.of(GlobalWindow.INSTANCE, intervalWindow1, intervalWindow2),
+          PaneInfo.NO_FIRING);
+
+  @Rule
+  public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
+
   @Before
   public void setup() {
     MockitoAnnotations.initMocks(this);
-    TestPipeline p = TestPipeline.create();
     input = p.apply(Create.of(1L, 2L, 3L));
 
-    bundleFactory = InProcessBundleFactory.create();
-    factory = new WindowEvaluatorFactory();
+    bundleFactory = ImmutableListBundleFactory.create();
+    factory = new WindowEvaluatorFactory(evaluationContext);
   }
 
   @Test
@@ -112,13 +121,16 @@ public class WindowEvaluatorFactoryTest {
 
     UncommittedBundle<Long> outputBundle = createOutputBundle(triggering, inputBundle);
 
-    InProcessTransformResult result = runEvaluator(triggering, inputBundle, transform);
+    TransformResult<Long> result = runEvaluator(triggering, inputBundle, transform);
 
     assertThat(
         Iterables.getOnlyElement(result.getOutputBundles()),
         Matchers.<UncommittedBundle<?>>equalTo(outputBundle));
     CommittedBundle<Long> committed = outputBundle.commit(Instant.now());
-    assertThat(committed.getElements(), containsInAnyOrder(third, first, second));
+    assertThat(
+        committed.getElements(),
+        containsInAnyOrder(
+            valueInIntervalWindow, valueInGlobalWindow, valueInGlobalAndTwoIntervalWindows));
   }
 
   @Test
@@ -134,23 +146,29 @@ public class WindowEvaluatorFactoryTest {
     BoundedWindow firstSecondWindow = new IntervalWindow(EPOCH, EPOCH.plus(windowDuration));
     BoundedWindow thirdWindow = new IntervalWindow(EPOCH.minus(windowDuration), EPOCH);
 
-    InProcessTransformResult result = runEvaluator(windowed, inputBundle, transform);
+    TransformResult<Long> result = runEvaluator(windowed, inputBundle, transform);
 
     assertThat(
         Iterables.getOnlyElement(result.getOutputBundles()),
         Matchers.<UncommittedBundle<?>>equalTo(outputBundle));
     CommittedBundle<Long> committed = outputBundle.commit(Instant.now());
 
-    WindowedValue<Long> expectedNewFirst =
-        WindowedValue.of(3L, new Instant(2L), firstSecondWindow, PaneInfo.NO_FIRING);
-    WindowedValue<Long> expectedNewSecond =
-        WindowedValue.of(
-            1L, EPOCH.plus(Duration.standardDays(3)), firstSecondWindow, PaneInfo.NO_FIRING);
-    WindowedValue<Long> expectedNewThird =
-        WindowedValue.of(2L, new Instant(-10L), thirdWindow, PaneInfo.NO_FIRING);
     assertThat(
         committed.getElements(),
-        containsInAnyOrder(expectedNewFirst, expectedNewSecond, expectedNewThird));
+        containsInAnyOrder(
+            // value in global window
+            isSingleWindowedValue(3L, new Instant(2L), firstSecondWindow, PaneInfo.NO_FIRING),
+
+            // value in just interval window
+            isSingleWindowedValue(2L, new Instant(-10L), thirdWindow, PaneInfo.NO_FIRING),
+
+            // value in global window and two interval windows
+            isSingleWindowedValue(
+                1L, EPOCH.plus(Duration.standardDays(3)), firstSecondWindow, PaneInfo.NO_FIRING),
+            isSingleWindowedValue(
+                1L, EPOCH.plus(Duration.standardDays(3)), firstSecondWindow, PaneInfo.NO_FIRING),
+            isSingleWindowedValue(
+                1L, EPOCH.plus(Duration.standardDays(3)), firstSecondWindow, PaneInfo.NO_FIRING)));
   }
 
   @Test
@@ -163,7 +181,7 @@ public class WindowEvaluatorFactoryTest {
     CommittedBundle<Long> inputBundle = createInputBundle();
     UncommittedBundle<Long> outputBundle = createOutputBundle(windowed, inputBundle);
 
-    InProcessTransformResult result = runEvaluator(windowed, inputBundle, transform);
+    TransformResult<Long> result = runEvaluator(windowed, inputBundle, transform);
 
     assertThat(
         Iterables.getOnlyElement(result.getOutputBundles()),
@@ -177,24 +195,39 @@ public class WindowEvaluatorFactoryTest {
     BoundedWindow wMinusSlide =
         new IntervalWindow(EPOCH.minus(windowDuration).plus(slidingBy), EPOCH.plus(slidingBy));
 
-    WindowedValue<Long> expectedFirst =
-        WindowedValue.of(
-            first.getValue(),
-            first.getTimestamp(),
-            ImmutableSet.of(w1, wMinusSlide),
-            PaneInfo.NO_FIRING);
-    WindowedValue<Long> expectedSecond =
-        WindowedValue.of(
-            second.getValue(), second.getTimestamp(), ImmutableSet.of(w1, w2), PaneInfo.NO_FIRING);
-    WindowedValue<Long> expectedThird =
-        WindowedValue.of(
-            third.getValue(),
-            third.getTimestamp(),
-            ImmutableSet.of(wMinus1, wMinusSlide),
-            PaneInfo.NO_FIRING);
-
     assertThat(
-        committed.getElements(), containsInAnyOrder(expectedFirst, expectedSecond, expectedThird));
+        committed.getElements(),
+        containsInAnyOrder(
+            // Value in global window mapped to one windowed value in multiple windows
+            isWindowedValue(
+                valueInGlobalWindow.getValue(),
+                valueInGlobalWindow.getTimestamp(),
+                ImmutableSet.of(w1, wMinusSlide),
+                PaneInfo.NO_FIRING),
+
+            // Value in interval window mapped to one windowed value in multiple windows
+            isWindowedValue(
+                valueInIntervalWindow.getValue(),
+                valueInIntervalWindow.getTimestamp(),
+                ImmutableSet.of(wMinus1, wMinusSlide),
+                PaneInfo.NO_FIRING),
+
+            // Value in three windows mapped to three windowed values in the same multiple windows
+            isWindowedValue(
+                valueInGlobalAndTwoIntervalWindows.getValue(),
+                valueInGlobalAndTwoIntervalWindows.getTimestamp(),
+                ImmutableSet.of(w1, w2),
+                PaneInfo.NO_FIRING),
+            isWindowedValue(
+                valueInGlobalAndTwoIntervalWindows.getValue(),
+                valueInGlobalAndTwoIntervalWindows.getTimestamp(),
+                ImmutableSet.of(w1, w2),
+                PaneInfo.NO_FIRING),
+            isWindowedValue(
+                valueInGlobalAndTwoIntervalWindows.getValue(),
+                valueInGlobalAndTwoIntervalWindows.getTimestamp(),
+                ImmutableSet.of(w1, w2),
+                PaneInfo.NO_FIRING)));
   }
 
   @Test
@@ -205,78 +238,96 @@ public class WindowEvaluatorFactoryTest {
     CommittedBundle<Long> inputBundle = createInputBundle();
     UncommittedBundle<Long> outputBundle = createOutputBundle(windowed, inputBundle);
 
-    InProcessTransformResult result = runEvaluator(windowed, inputBundle, transform);
+    TransformResult<Long> result = runEvaluator(windowed, inputBundle, transform);
 
     assertThat(
         Iterables.getOnlyElement(result.getOutputBundles()),
         Matchers.<UncommittedBundle<?>>equalTo(outputBundle));
     CommittedBundle<Long> committed = outputBundle.commit(Instant.now());
 
-    WindowedValue<Long> expectedFirst =
-        WindowedValue.of(
-            first.getValue(),
-            first.getTimestamp(),
-            new IntervalWindow(first.getTimestamp(), first.getTimestamp().plus(1L)),
-            PaneInfo.NO_FIRING);
-    WindowedValue<Long> expectedSecond = WindowedValue.of(second.getValue(),
-        second.getTimestamp(),
-        new IntervalWindow(second.getTimestamp(), second.getTimestamp().plus(1L)),
-        PaneInfo.NO_FIRING);
-    WindowedValue<Long> expectedThird =
-        WindowedValue.of(
-            third.getValue(),
-            third.getTimestamp(),
-            third.getWindows(),
-            PaneInfo.NO_FIRING);
-
     assertThat(
-        committed.getElements(), containsInAnyOrder(expectedFirst, expectedSecond, expectedThird));
+        committed.getElements(),
+        containsInAnyOrder(
+            // Value in global window mapped to [timestamp, timestamp+1)
+            isSingleWindowedValue(
+                valueInGlobalWindow.getValue(),
+                valueInGlobalWindow.getTimestamp(),
+                new IntervalWindow(
+                    valueInGlobalWindow.getTimestamp(),
+                    valueInGlobalWindow.getTimestamp().plus(1L)),
+                PaneInfo.NO_FIRING),
+
+            // Value in interval window mapped to the same window
+            isWindowedValue(
+                valueInIntervalWindow.getValue(),
+                valueInIntervalWindow.getTimestamp(),
+                valueInIntervalWindow.getWindows(),
+                PaneInfo.NO_FIRING),
+
+            // Value in global window and two interval windows exploded and mapped in both ways
+            isSingleWindowedValue(
+                valueInGlobalAndTwoIntervalWindows.getValue(),
+                valueInGlobalAndTwoIntervalWindows.getTimestamp(),
+                new IntervalWindow(
+                    valueInGlobalAndTwoIntervalWindows.getTimestamp(),
+                    valueInGlobalAndTwoIntervalWindows.getTimestamp().plus(1L)),
+                PaneInfo.NO_FIRING),
+
+            isSingleWindowedValue(
+                valueInGlobalAndTwoIntervalWindows.getValue(),
+                valueInGlobalAndTwoIntervalWindows.getTimestamp(),
+                intervalWindow1,
+                PaneInfo.NO_FIRING),
+
+            isSingleWindowedValue(
+                valueInGlobalAndTwoIntervalWindows.getValue(),
+                valueInGlobalAndTwoIntervalWindows.getTimestamp(),
+                intervalWindow2,
+                PaneInfo.NO_FIRING)));
   }
 
   private CommittedBundle<Long> createInputBundle() {
     CommittedBundle<Long> inputBundle =
         bundleFactory
-            .createRootBundle(input)
-            .add(first)
-            .add(second)
-            .add(third)
+            .createBundle(input)
+            .add(valueInGlobalWindow)
+            .add(valueInGlobalAndTwoIntervalWindows)
+            .add(valueInIntervalWindow)
             .commit(Instant.now());
     return inputBundle;
   }
 
   private UncommittedBundle<Long> createOutputBundle(
       PCollection<Long> output, CommittedBundle<Long> inputBundle) {
-    UncommittedBundle<Long> outputBundle = bundleFactory.createBundle(inputBundle, output);
-    when(evaluationContext.createBundle(inputBundle, output)).thenReturn(outputBundle);
+    UncommittedBundle<Long> outputBundle = bundleFactory.createBundle(output);
+    when(evaluationContext.createBundle(output)).thenReturn(outputBundle);
     return outputBundle;
   }
 
-  private InProcessTransformResult runEvaluator(
+  private TransformResult<Long> runEvaluator(
       PCollection<Long> windowed,
       CommittedBundle<Long> inputBundle,
       Window.Bound<Long> windowTransform /* Required while Window.Bound is a composite */)
       throws Exception {
     TransformEvaluator<Long> evaluator =
         factory.forApplication(
-            AppliedPTransform.of("Window", input, windowed, windowTransform),
-            inputBundle,
-            evaluationContext);
+            AppliedPTransform.of("Window", input, windowed, windowTransform), inputBundle);
 
-    evaluator.processElement(first);
-    evaluator.processElement(second);
-    evaluator.processElement(third);
-    InProcessTransformResult result = evaluator.finishBundle();
+    evaluator.processElement(valueInGlobalWindow);
+    evaluator.processElement(valueInGlobalAndTwoIntervalWindows);
+    evaluator.processElement(valueInIntervalWindow);
+    TransformResult<Long> result = evaluator.finishBundle();
     return result;
   }
 
   private static class EvaluatorTestWindowFn extends NonMergingWindowFn<Long, BoundedWindow> {
     @Override
     public Collection<BoundedWindow> assignWindows(AssignContext c) throws Exception {
-      if (c.windows().contains(GlobalWindow.INSTANCE)) {
+      if (c.window().equals(GlobalWindow.INSTANCE)) {
         return Collections.<BoundedWindow>singleton(new IntervalWindow(c.timestamp(),
             c.timestamp().plus(1L)));
       }
-      return (Collection<BoundedWindow>) c.windows();
+      return Collections.singleton(c.window());
     }
 
     @Override

@@ -17,8 +17,10 @@
  */
 package org.apache.beam.sdk.util;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 import com.google.api.client.util.BackOff;
-import com.google.common.base.Preconditions;
+
 
 /**
  * Implementation of {@link BackOff} that increases the back off period for each retry attempt
@@ -47,6 +49,7 @@ import com.google.common.base.Preconditions;
  *
  * <p>Implementation is not thread-safe.
  */
+@Deprecated
 public class IntervalBoundedExponentialBackOff implements BackOff {
   public static final double DEFAULT_MULTIPLIER = 1.5;
   public static final double DEFAULT_RANDOMIZATION_FACTOR = 0.5;
@@ -55,10 +58,8 @@ public class IntervalBoundedExponentialBackOff implements BackOff {
   private int currentAttempt;
 
   public IntervalBoundedExponentialBackOff(long maximumIntervalMillis, long initialIntervalMillis) {
-    Preconditions.checkArgument(
-        maximumIntervalMillis > 0, "Maximum interval must be greater than zero.");
-    Preconditions.checkArgument(
-        initialIntervalMillis > 0, "Initial interval must be greater than zero.");
+    checkArgument(maximumIntervalMillis > 0, "Maximum interval must be greater than zero.");
+    checkArgument(initialIntervalMillis > 0, "Initial interval must be greater than zero.");
     this.maximumIntervalMillis = maximumIntervalMillis;
     this.initialIntervalMillis = initialIntervalMillis;
     reset();

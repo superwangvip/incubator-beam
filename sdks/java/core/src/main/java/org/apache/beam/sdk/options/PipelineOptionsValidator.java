@@ -17,18 +17,18 @@
  */
 package org.apache.beam.sdk.options;
 
-import org.apache.beam.sdk.options.Validation.Required;
-import org.apache.beam.sdk.util.common.ReflectHelpers;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.Collections2;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.SortedSetMultimap;
 import com.google.common.collect.TreeMultimap;
-
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.Collection;
+import org.apache.beam.sdk.options.Validation.Required;
+import org.apache.beam.sdk.util.common.ReflectHelpers;
 
 /**
  * Validates that the {@link PipelineOptions} conforms to all the {@link Validation} criteria.
@@ -46,11 +46,10 @@ public class PipelineOptionsValidator {
    * @return The type
    */
   public static <T extends PipelineOptions> T validate(Class<T> klass, PipelineOptions options) {
-    Preconditions.checkNotNull(klass);
-    Preconditions.checkNotNull(options);
-    Preconditions.checkArgument(Proxy.isProxyClass(options.getClass()));
-    Preconditions.checkArgument(Proxy.getInvocationHandler(options)
-        instanceof ProxyInvocationHandler);
+    checkNotNull(klass);
+    checkNotNull(options);
+    checkArgument(Proxy.isProxyClass(options.getClass()));
+    checkArgument(Proxy.getInvocationHandler(options) instanceof ProxyInvocationHandler);
 
     // Ensure the methods for T are registered on the ProxyInvocationHandler
     T asClassOptions = options.as(klass);
@@ -68,8 +67,9 @@ public class PipelineOptionsValidator {
             requiredGroups.put(requiredGroup, method);
           }
         } else {
-          Preconditions.checkArgument(handler.invoke(asClassOptions, method, null) != null,
-              "Missing required value for [" + method + ", \"" + getDescription(method) + "\"]. ");
+          checkArgument(handler.invoke(asClassOptions, method, null) != null,
+              "Missing required value for [%s, \"%s\"]. ",
+              method, getDescription(method));
         }
       }
     }

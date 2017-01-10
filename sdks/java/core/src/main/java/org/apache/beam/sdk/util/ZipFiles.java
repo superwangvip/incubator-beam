@@ -26,7 +26,6 @@ import com.google.common.io.ByteSource;
 import com.google.common.io.CharSource;
 import com.google.common.io.Closer;
 import com.google.common.io.Files;
-
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -235,6 +234,7 @@ public final class ZipFiles {
         sourceDirectory.isDirectory(),
         "%s is not a valid directory",
         sourceDirectory.getAbsolutePath());
+
     ZipOutputStream zos = new ZipOutputStream(outputStream);
     for (File file : sourceDirectory.listFiles()) {
       zipDirectoryInternal(file, "", zos);

@@ -17,15 +17,13 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.testing.CoderProperties;
+import static org.hamcrest.Matchers.equalTo;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertThat;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Serializable;
@@ -35,6 +33,11 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.apache.beam.sdk.testing.CoderProperties;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link DelegateCoder}. */
 @RunWith(JUnit4.class)
@@ -45,6 +48,9 @@ public class DelegateCoderTest implements Serializable {
       Collections.singleton(13),
       new HashSet<>(Arrays.asList(31, -5, 83)));
 
+  private static final TypeDescriptor<Set<Integer>> SET_INTEGER_TYPE_DESCRIPTOR =
+      new TypeDescriptor<Set<Integer>>() {};
+
   private static final DelegateCoder<Set<Integer>, List<Integer>> TEST_CODER = DelegateCoder.of(
       ListCoder.of(VarIntCoder.of()),
       new DelegateCoder.CodingFunction<Set<Integer>, List<Integer>>() {
@@ -52,13 +58,33 @@ public class DelegateCoderTest implements Serializable {
         public List<Integer> apply(Set<Integer> input) {
           return Lists.newArrayList(input);
         }
+
+        @Override
+        public boolean equals(Object o) {
+          return o != null && this.getClass() == o.getClass();
+        }
+
+        @Override
+        public int hashCode() {
+          return this.getClass().hashCode();
+        }
       },
       new DelegateCoder.CodingFunction<List<Integer>, Set<Integer>>() {
         @Override
         public Set<Integer> apply(List<Integer> input) {
           return Sets.newHashSet(input);
         }
-      });
+
+        @Override
+        public boolean equals(Object o) {
+          return o != null && this.getClass() == o.getClass();
+        }
+
+        @Override
+        public int hashCode() {
+          return this.getClass().hashCode();
+        }
+      }, SET_INTEGER_TYPE_DESCRIPTOR);
 
   @Test
   public void testDeterministic() throws Exception {
@@ -139,5 +165,52 @@ public class DelegateCoderTest implements Serializable {
     CoderProperties.coderAllowsEncoding(
         trivialDelegateCoder,
         TestAllowedEncodingsCoder.class.getName() + ":" + TEST_ALLOWED_ENCODING);
+  }
+
+  @Test
+  public void testCoderEquals() throws Exception {
+    DelegateCoder.CodingFunction<Integer, Integer> identityFn =
+        new DelegateCoder.CodingFunction<Integer, Integer>() {
+          @Override
+          public Integer apply(Integer input) {
+            return input;
+          }
+        };
+    Coder<Integer> varIntCoder1 = DelegateCoder.of(VarIntCoder.of(), identityFn, identityFn);
+    Coder<Integer> varIntCoder2 = DelegateCoder.of(VarIntCoder.of(), identityFn, identityFn);
+    Coder<Integer> bigEndianIntegerCoder =
+        DelegateCoder.of(BigEndianIntegerCoder.of(), identityFn, identityFn);
+
+    assertEquals(varIntCoder1, varIntCoder2);
+    assertEquals(varIntCoder1.hashCode(), varIntCoder2.hashCode());
+    assertNotEquals(varIntCoder1, bigEndianIntegerCoder);
+    assertNotEquals(varIntCoder1.hashCode(), bigEndianIntegerCoder.hashCode());
+  }
+
+  @Test
+  public void testEncodedTypeDescriptorSimpleEncodedType() throws Exception {
+    assertThat(
+        DelegateCoder.of(
+            StringUtf8Coder.of(),
+            new DelegateCoder.CodingFunction<Integer, String>() {
+              @Override
+              public String apply(Integer input) {
+                return String.valueOf(input);
+              }
+            },
+            new DelegateCoder.CodingFunction<String, Integer>() {
+              @Override
+              public Integer apply(String input) {
+                return Integer.valueOf(input);
+              }
+            },
+            new TypeDescriptor<Integer>(){}).getEncodedTypeDescriptor(),
+        equalTo(TypeDescriptor.of(Integer.class)));
+  }
+
+  @Test
+  public void testEncodedTypeDescriptor() throws Exception {
+    TypeDescriptor<Set<Integer>> typeDescriptor = new TypeDescriptor<Set<Integer>>() {};
+    assertThat(TEST_CODER.getEncodedTypeDescriptor(), equalTo(typeDescriptor));
   }
 }

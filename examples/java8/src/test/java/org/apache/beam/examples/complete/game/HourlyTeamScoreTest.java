@@ -17,10 +17,13 @@
  */
 package org.apache.beam.examples.complete.game;
 
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.List;
 import org.apache.beam.examples.complete.game.UserScore.GameActionInfo;
 import org.apache.beam.examples.complete.game.UserScore.ParseEventFn;
-import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -30,17 +33,13 @@ import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.TypeDescriptor;
-
+import org.apache.beam.sdk.values.TypeDescriptors;
 import org.joda.time.Instant;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Tests of HourlyTeamScore.
@@ -82,31 +81,37 @@ public class HourlyTeamScoreTest implements Serializable {
       KV.of("user18_BananaEmu", 1), KV.of("user18_ApricotCaneToad", 14)
     };
 
+  @Rule
+  public TestPipeline p = TestPipeline.create();
 
   /** Test the filtering. */
   @Test
   @Category(RunnableOnService.class)
   public void testUserScoresFilter() throws Exception {
-    Pipeline p = TestPipeline.create();
 
     final Instant startMinTimestamp = new Instant(1447965680000L);
 
     PCollection<String> input = p.apply(Create.of(GAME_EVENTS).withCoder(StringUtf8Coder.of()));
 
     PCollection<KV<String, Integer>> output = input
-      .apply(ParDo.named("ParseGameEvent").of(new ParseEventFn()))
+      .apply("ParseGameEvent", ParDo.of(new ParseEventFn()))
 
-      .apply("FilterStartTime", Filter.byPredicate(
+      .apply("FilterStartTime", Filter.by(
           (GameActionInfo gInfo)
               -> gInfo.getTimestamp() > startMinTimestamp.getMillis()))
       // run a map to access the fields in the result.
       .apply(MapElements
           .via((GameActionInfo gInfo) -> KV.of(gInfo.getUser(), gInfo.getScore()))
-          .withOutputType(new TypeDescriptor<KV<String, Integer>>() {}));
+          .withOutputType(
+              TypeDescriptors.kvs(TypeDescriptors.strings(), TypeDescriptors.integers())));
 
       PAssert.that(output).containsInAnyOrder(FILTERED_EVENTS);
 
-    p.run();
+    p.run().waitUntilFinish();
   }
 
+  @Test
+  public void testUserScoreOptions() {
+    PipelineOptionsFactory.as(HourlyTeamScore.Options.class);
+  }
 }

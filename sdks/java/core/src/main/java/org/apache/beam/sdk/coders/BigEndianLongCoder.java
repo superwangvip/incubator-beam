@@ -18,7 +18,6 @@
 package org.apache.beam.sdk.coders;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
-
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
@@ -26,6 +25,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UTFDataFormatException;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link BigEndianLongCoder} encodes {@link Long}s in 8 bytes, big-endian.
@@ -40,6 +40,7 @@ public class BigEndianLongCoder extends AtomicCoder<Long> {
   /////////////////////////////////////////////////////////////////////////////
 
   private static final BigEndianLongCoder INSTANCE = new BigEndianLongCoder();
+  private static final TypeDescriptor<Long> TYPE_DESCRIPTOR = new TypeDescriptor<Long>() {};
 
   private BigEndianLongCoder() {}
 
@@ -82,6 +83,11 @@ public class BigEndianLongCoder extends AtomicCoder<Long> {
   @Override
   public boolean isRegisterByteSizeObserverCheap(Long value, Context context) {
     return true;
+  }
+
+  @Override
+  public TypeDescriptor<Long> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 
   /**

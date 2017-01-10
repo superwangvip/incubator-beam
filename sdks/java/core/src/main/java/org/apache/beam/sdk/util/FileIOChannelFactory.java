@@ -17,47 +17,81 @@
  */
 package org.apache.beam.sdk.util;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.Iterables;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.regex.Matcher;
+import javax.annotation.Nullable;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * Implements IOChannelFactory for local files.
+ * Implements {@link IOChannelFactory} for local files.
  */
 public class FileIOChannelFactory implements IOChannelFactory {
   private static final Logger LOG = LoggerFactory.getLogger(FileIOChannelFactory.class);
 
-  // This implementation only allows for wildcards in the file name.
-  // The directory portion must exist as-is.
+   /**
+   * Create a {@link FileIOChannelFactory} with the given {@link PipelineOptions}.
+   */
+  public static FileIOChannelFactory fromOptions(@Nullable PipelineOptions options) {
+    return new FileIOChannelFactory();
+  }
+
+  private FileIOChannelFactory() {}
+
+  /**
+   *  Converts the given file spec to a java {@link File}. If {@code spec} is actually a URI with
+   *  the {@code file} scheme, then this function will ensure that the returned {@link File}
+   *  has the correct path.
+   */
+  private static File specToFile(String spec) {
+    try {
+      // Handle URI.
+      URI uri = URI.create(spec);
+      return Paths.get(uri).toFile();
+    } catch (IllegalArgumentException e) {
+      // Fall back to assuming this is actually a file.
+      return Paths.get(spec).toFile();
+    }
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Wildcards in the directory portion are not supported.
+   */
   @Override
   public Collection<String> match(String spec) throws IOException {
-    File file = new File(spec);
+    File file = specToFile(spec);
 
     File parent = file.getAbsoluteFile().getParentFile();
     if (!parent.exists()) {
-      throw new IOException("Unable to find parent directory of " + spec);
+      return Collections.EMPTY_LIST;
     }
 
     // Method getAbsolutePath() on Windows platform may return something like
@@ -95,7 +129,7 @@ public class FileIOChannelFactory implements IOChannelFactory {
   public ReadableByteChannel open(String spec) throws IOException {
     LOG.debug("opening file {}", spec);
     @SuppressWarnings("resource") // The caller is responsible for closing the channel.
-    FileInputStream inputStream = new FileInputStream(spec);
+    FileInputStream inputStream = new FileInputStream(specToFile(spec));
     // Use this method for creating the channel (rather than new FileChannel) so that we get
     // regular FileNotFoundException. Closing the underyling channel will close the inputStream.
     return inputStream.getChannel();
@@ -105,10 +139,11 @@ public class FileIOChannelFactory implements IOChannelFactory {
   public WritableByteChannel create(String spec, String mimeType)
       throws IOException {
     LOG.debug("creating file {}", spec);
-    File file = new File(spec);
+    File file = specToFile(spec);
     if (file.getAbsoluteFile().getParentFile() != null
         && !file.getAbsoluteFile().getParentFile().exists()
-        && !file.getAbsoluteFile().getParentFile().mkdirs()) {
+        && !file.getAbsoluteFile().getParentFile().mkdirs()
+        && !file.getAbsoluteFile().getParentFile().exists()) {
       throw new IOException("Unable to create parent directories for '" + spec + "'");
     }
     return Channels.newChannel(
@@ -118,7 +153,7 @@ public class FileIOChannelFactory implements IOChannelFactory {
   @Override
   public long getSizeBytes(String spec) throws IOException {
     try {
-      return Files.size(FileSystems.getDefault().getPath(spec));
+      return Files.size(specToFile(spec).toPath());
     } catch (NoSuchFileException e) {
       throw new FileNotFoundException(e.getReason());
     }
@@ -131,6 +166,53 @@ public class FileIOChannelFactory implements IOChannelFactory {
 
   @Override
   public String resolve(String path, String other) throws IOException {
-    return Paths.get(path).resolve(other).toString();
+    return toPath(path).resolve(other).toString();
+  }
+
+  @Override
+  public Path toPath(String path) {
+    return specToFile(path).toPath();
+  }
+
+  @Override
+  public void copy(List<String> srcFilenames, List<String> destFilenames) throws IOException {
+    checkArgument(
+        srcFilenames.size() == destFilenames.size(),
+        "Number of source files %s must equal number of destination files %s",
+        srcFilenames.size(),
+        destFilenames.size());
+    int numFiles = srcFilenames.size();
+    for (int i = 0; i < numFiles; i++) {
+      String src = srcFilenames.get(i);
+      String dst = destFilenames.get(i);
+      LOG.debug("Copying {} to {}", src, dst);
+      try {
+        // Copy the source file, replacing the existing destination.
+        // Paths.get(x) will not work on Windows OSes cause of the ":" after the drive letter.
+        Files.copy(
+            new File(src).toPath(),
+            new File(dst).toPath(),
+            StandardCopyOption.REPLACE_EXISTING);
+      } catch (NoSuchFileException e) {
+        LOG.debug("{} does not exist.", src);
+        // Suppress exception if file does not exist.
+      }
+    }
+  }
+
+  @Override
+  public void remove(Collection<String> filesOrDirs) throws IOException {
+    for (String fileOrDir : filesOrDirs) {
+      LOG.debug("Removing file {}", fileOrDir);
+      removeOne(fileOrDir);
+    }
+  }
+
+  private void removeOne(String fileOrDir) throws IOException {
+    // Delete the file if it exists.
+    boolean exists = Files.deleteIfExists(Paths.get(fileOrDir));
+    if (!exists) {
+      LOG.debug("Tried to delete {}, but it did not exist", fileOrDir);
+    }
   }
 }

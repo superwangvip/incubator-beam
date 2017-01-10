@@ -18,7 +18,6 @@
 package org.apache.beam.sdk.coders;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
-
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
@@ -26,6 +25,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UTFDataFormatException;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link BigEndianIntegerCoder} encodes {@link Integer Integers} in 4 bytes, big-endian.
@@ -40,6 +40,7 @@ public class BigEndianIntegerCoder extends AtomicCoder<Integer> {
   /////////////////////////////////////////////////////////////////////////////
 
   private static final BigEndianIntegerCoder INSTANCE = new BigEndianIntegerCoder();
+  private static final TypeDescriptor<Integer> TYPE_DESCRIPTOR = new TypeDescriptor<Integer>() {};
 
   private BigEndianIntegerCoder() {}
 
@@ -82,6 +83,11 @@ public class BigEndianIntegerCoder extends AtomicCoder<Integer> {
   @Override
   public boolean isRegisterByteSizeObserverCheap(Integer value, Context context) {
     return true;
+  }
+
+  @Override
+  public TypeDescriptor<Integer> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 
   /**

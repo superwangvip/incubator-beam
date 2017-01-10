@@ -17,22 +17,20 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.PropertyNames;
-import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
-
-import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableList;
+import static com.google.common.base.Preconditions.checkArgument;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
+import com.google.common.base.Optional;
+import com.google.common.collect.ImmutableList;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.List;
-
 import javax.annotation.Nullable;
+import org.apache.beam.sdk.util.PropertyNames;
+import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link NullableCoder} encodes nullable values of type {@code T} using a nested
@@ -54,8 +52,7 @@ public class NullableCoder<T> extends StandardCoder<T> {
   public static NullableCoder<?> of(
       @JsonProperty(PropertyNames.COMPONENT_ENCODINGS)
       List<Coder<?>> components) {
-    Preconditions.checkArgument(components.size() == 1,
-        "Expecting 1 components, got " + components.size());
+    checkArgument(components.size() == 1, "Expecting 1 components, got %s", components.size());
     return of(components.get(0));
   }
 
@@ -69,6 +66,13 @@ public class NullableCoder<T> extends StandardCoder<T> {
     this.valueCoder = valueCoder;
   }
 
+  /**
+   * Returns the inner {@link Coder} wrapped by this {@link NullableCoder} instance.
+   */
+  public Coder<T> getValueCoder() {
+    return valueCoder;
+  }
+
   @Override
   public void encode(@Nullable T value, OutputStream outStream, Context context)
       throws IOException, CoderException  {
@@ -76,7 +80,7 @@ public class NullableCoder<T> extends StandardCoder<T> {
       outStream.write(ENCODE_NULL);
     } else {
       outStream.write(ENCODE_PRESENT);
-      valueCoder.encode(value, outStream, context.nested());
+      valueCoder.encode(value, outStream, context);
     }
   }
 
@@ -91,7 +95,7 @@ public class NullableCoder<T> extends StandardCoder<T> {
             "NullableCoder expects either a byte valued %s (null) or %s (present), got %s",
             ENCODE_NULL, ENCODE_PRESENT, b));
     }
-    return valueCoder.decode(inStream, context.nested());
+    return valueCoder.decode(inStream, context);
   }
 
   @Override
@@ -139,7 +143,7 @@ public class NullableCoder<T> extends StandardCoder<T> {
       @Nullable T value, ElementByteSizeObserver observer, Context context) throws Exception {
     observer.update(1);
     if (value != null) {
-      valueCoder.registerByteSizeObserver(value, observer, context.nested());
+      valueCoder.registerByteSizeObserver(value, observer, context);
     }
   }
 
@@ -160,7 +164,7 @@ public class NullableCoder<T> extends StandardCoder<T> {
       // If valueCoder is a StandardCoder then we can ask it directly for the encoded size of
       // the value, adding 1 byte to count the null indicator.
       return 1  + ((StandardCoder<T>) valueCoder)
-          .getEncodedElementByteSize(value, context.nested());
+          .getEncodedElementByteSize(value, context);
     }
 
     // If value is not a StandardCoder then fall back to the default StandardCoder behavior
@@ -175,6 +179,14 @@ public class NullableCoder<T> extends StandardCoder<T> {
    */
   @Override
   public boolean isRegisterByteSizeObserverCheap(@Nullable T value, Context context) {
-    return valueCoder.isRegisterByteSizeObserverCheap(value, context.nested());
+    if (value == null) {
+      return true;
+    }
+    return valueCoder.isRegisterByteSizeObserverCheap(value, context);
+  }
+
+  @Override
+  public TypeDescriptor<T> getEncodedTypeDescriptor() {
+    return valueCoder.getEncodedTypeDescriptor();
   }
 }

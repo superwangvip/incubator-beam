@@ -19,21 +19,19 @@ package org.apache.beam.runners.direct;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import org.apache.beam.runners.direct.InProcessPipelineRunner.CommittedBundle;
-import org.apache.beam.runners.direct.InProcessPipelineRunner.UncommittedBundle;
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.SetMultimap;
+import org.apache.beam.runners.direct.DirectRunner.CommittedBundle;
+import org.apache.beam.runners.direct.DirectRunner.Enforcement;
+import org.apache.beam.runners.direct.DirectRunner.UncommittedBundle;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.CoderException;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.util.IllegalMutationException;
 import org.apache.beam.sdk.util.MutationDetector;
 import org.apache.beam.sdk.util.MutationDetectors;
-import org.apache.beam.sdk.util.UserCodeException;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.common.collect.HashMultimap;
-import com.google.common.collect.SetMultimap;
-
 import org.joda.time.Instant;
 
 /**
@@ -48,36 +46,51 @@ import org.joda.time.Instant;
  */
 class ImmutabilityCheckingBundleFactory implements BundleFactory {
   /**
-   * Create a new {@link ImmutabilityCheckingBundleFactory} that uses the underlying
-   * {@link BundleFactory} to create the output bundle.
+   * Create a new {@link ImmutabilityCheckingBundleFactory} that uses the underlying {@link
+   * BundleFactory} to create the output bundle.
    */
-  public static ImmutabilityCheckingBundleFactory create(BundleFactory underlying) {
-    return new ImmutabilityCheckingBundleFactory(underlying);
+  public static ImmutabilityCheckingBundleFactory create(
+      BundleFactory underlying, DirectGraph graph) {
+    return new ImmutabilityCheckingBundleFactory(underlying, graph);
   }
 
   private final BundleFactory underlying;
+  private final DirectGraph graph;
 
-  private ImmutabilityCheckingBundleFactory(BundleFactory underlying) {
+  private ImmutabilityCheckingBundleFactory(BundleFactory underlying, DirectGraph graph) {
     this.underlying = checkNotNull(underlying);
+    this.graph = graph;
+  }
+
+  /**
+   * {@inheritDoc}.
+   *
+   * @return a root bundle created by the underlying {@link PCollection}. Root bundles belong to the
+   * runner, which is required to use the contents in a way that is mutation-safe.
+   */
+  @Override
+  public <T> UncommittedBundle<T> createRootBundle() {
+    return underlying.createRootBundle();
   }
 
   @Override
-  public <T> UncommittedBundle<T> createRootBundle(PCollection<T> output) {
-    return new ImmutabilityEnforcingBundle<>(underlying.createRootBundle(output));
+  public <T> UncommittedBundle<T> createBundle(PCollection<T> output) {
+    if (Enforcement.IMMUTABILITY.appliesTo(output, graph)) {
+      return new ImmutabilityEnforcingBundle<>(underlying.createBundle(output));
+    }
+    return underlying.createBundle(output);
   }
 
   @Override
-  public <T> UncommittedBundle<T> createBundle(CommittedBundle<?> input, PCollection<T> output) {
-    return new ImmutabilityEnforcingBundle<>(underlying.createBundle(input, output));
+  public <K, T> UncommittedBundle<T> createKeyedBundle(
+      StructuralKey<K> key, PCollection<T> output) {
+    if (Enforcement.IMMUTABILITY.appliesTo(output, graph)) {
+      return new ImmutabilityEnforcingBundle<>(underlying.createKeyedBundle(key, output));
+    }
+    return underlying.createKeyedBundle(key, output);
   }
 
-  @Override
-  public <T> UncommittedBundle<T> createKeyedBundle(
-      CommittedBundle<?> input, Object key, PCollection<T> output) {
-    return new ImmutabilityEnforcingBundle<>(underlying.createKeyedBundle(input, key, output));
-  }
-
-  private static class ImmutabilityEnforcingBundle<T> implements UncommittedBundle<T> {
+  private class ImmutabilityEnforcingBundle<T> implements UncommittedBundle<T> {
     private final UncommittedBundle<T> underlying;
     private final SetMultimap<WindowedValue<T>, MutationDetector> mutationDetectors;
     private Coder<T> coder;
@@ -111,17 +124,16 @@ class ImmutabilityCheckingBundleFactory implements BundleFactory {
         try {
           detector.verifyUnmodified();
         } catch (IllegalMutationException exn) {
-          throw UserCodeException.wrap(
-              new IllegalMutationException(
-                  String.format(
-                      "PTransform %s mutated value %s after it was output (new value was %s)."
-                          + " Values must not be mutated in any way after being output.",
-                      underlying.getPCollection().getProducingTransformInternal().getFullName(),
-                      exn.getSavedValue(),
-                      exn.getNewValue()),
-                  exn.getSavedValue(),
-                  exn.getNewValue(),
-                  exn));
+            throw new IllegalMutationException(
+                String.format(
+                    "PTransform %s mutated value %s after it was output (new value was %s)."
+                        + " Values must not be mutated in any way after being output.",
+                    graph.getProducer(underlying.getPCollection()).getFullName(),
+                    exn.getSavedValue(),
+                    exn.getNewValue()),
+                exn.getSavedValue(),
+                exn.getNewValue(),
+                exn);
         }
       }
       return underlying.commit(synchronizedProcessingTime);

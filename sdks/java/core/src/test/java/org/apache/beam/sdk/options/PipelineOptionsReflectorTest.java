@@ -20,20 +20,21 @@ package org.apache.beam.sdk.options;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.isOneOf;
 import static org.hamcrest.Matchers.not;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.google.common.collect.ImmutableSet;
+import java.util.Set;
 import org.hamcrest.FeatureMatcher;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.util.Set;
 
 /**
  * Unit tests for {@link PipelineOptionsReflector}.
@@ -130,6 +131,24 @@ public class PipelineOptionsReflectorTest {
   }
 
   @Test
+  public void testShouldSerialize() {
+    Set<PipelineOptionSpec> properties =
+        PipelineOptionsReflector.getOptionSpecs(JsonIgnoreOptions.class);
+
+    assertThat(properties, hasItem(allOf(hasName("notIgnored"), shouldSerialize())));
+    assertThat(properties, hasItem(allOf(hasName("ignored"), not(shouldSerialize()))));
+  }
+
+  interface JsonIgnoreOptions extends PipelineOptions {
+    String getNotIgnored();
+    void setNotIgnored(String value);
+
+    @JsonIgnore
+    String getIgnored();
+    void setIgnored(String value);
+  }
+
+  @Test
   public void testMultipleInputInterfaces() {
     Set<Class<? extends PipelineOptions>> interfaces =
         ImmutableSet.<Class<? extends PipelineOptions>>of(
@@ -190,6 +209,17 @@ public class PipelineOptionsReflectorTest {
       @Override
       protected String featureValueOf(PipelineOptionSpec actual) {
         return actual.getGetterMethod().getName();
+      }
+    };
+  }
+
+  private static Matcher<PipelineOptionSpec> shouldSerialize() {
+    return new FeatureMatcher<PipelineOptionSpec, Boolean>(equalTo(true),
+        "should serialize", "shouldSerialize") {
+
+      @Override
+      protected Boolean featureValueOf(PipelineOptionSpec actual) {
+        return actual.shouldSerialize();
       }
     };
   }

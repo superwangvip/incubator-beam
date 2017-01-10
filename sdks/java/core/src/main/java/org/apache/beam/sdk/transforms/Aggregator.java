@@ -23,18 +23,16 @@ import org.apache.beam.sdk.transforms.Combine.CombineFn;
  * An {@code Aggregator<InputT>} enables monitoring of values of type {@code InputT},
  * to be combined across all bundles.
  *
- * <p>Aggregators are created by calling {@link DoFn#createAggregator},
+ * <p>Aggregators are created by calling
+ * {@link DoFn#createAggregator DoFn.createAggregator},
  * typically from the {@link DoFn} constructor. Elements can be added to the
  * {@code Aggregator} by calling {@link Aggregator#addValue}.
  *
- * <p>Aggregators are visible in the monitoring UI, when the pipeline is run
- * using DataflowPipelineRunner or BlockingDataflowPipelineRunner, along with
- * their current value. Aggregators may not become visible until the system
- * begins executing the ParDo transform that created them and/or their initial
- * value is changed.
+ * <p>It is runner-dependent whether aggregators are accessible during pipeline execution or only
+ * after jobs have completed.
  *
  * <p>Example:
- * <pre> {@code
+ * <pre>{@code
  * class MyDoFn extends DoFn<String, String> {
  *   private Aggregator<Integer, Integer> myAggregator;
  *
@@ -42,12 +40,12 @@ import org.apache.beam.sdk.transforms.Combine.CombineFn;
  *     myAggregator = createAggregator("myAggregator", new Sum.SumIntegerFn());
  *   }
  *
- *   @Override
+ *   {@literal @}ProcessElement
  *   public void processElement(ProcessContext c) {
  *     myAggregator.addValue(1);
  *   }
  * }
- * } </pre>
+ * }</pre>
  *
  * @param <InputT> the type of input values
  * @param <OutputT> the type of output values
@@ -69,11 +67,4 @@ public interface Aggregator<InputT, OutputT> {
    * aggregator.
    */
   CombineFn<InputT, ?, OutputT> getCombineFn();
-
-  // TODO: Consider the following additional API conveniences:
-  // - In addition to createAggregator(), consider adding getAggregator() to
-  //   avoid the need to store the aggregator locally in a DoFn, i.e., create
-  //   if not already present.
-  // - Add a shortcut for the most common aggregator:
-  //   c.createAggregator("name", new Sum.SumIntegerFn()).
 }

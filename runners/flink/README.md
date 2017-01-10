@@ -1,3 +1,22 @@
+<!--
+    Licensed to the Apache Software Foundation (ASF) under one
+    or more contributor license agreements.  See the NOTICE file
+    distributed with this work for additional information
+    regarding copyright ownership.  The ASF licenses this file
+    to you under the Apache License, Version 2.0 (the
+    "License"); you may not use this file except in compliance
+    with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing,
+    software distributed under the License is distributed on an
+    "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    KIND, either express or implied.  See the License for the
+    specific language governing permissions and limitations
+    under the License.
+-->
+
 Flink Beam Runner (Flink-Runner)
 -------------------------------
 
@@ -27,17 +46,20 @@ and sinks or use the provided support for Apache Kafka.
 
 ### Seamless integration
 
-To execute a Beam program in streaming mode, just enable streaming in the `PipelineOptions`:
+The Flink Runner decides to use batch or streaming execution mode based on whether programs use
+unbounded sources. When unbounded sources are used, it executes in streaming mode, otherwise it
+uses the batch execution mode.
+
+If you wish to explicitly enable streaming mode, please set the streaming flag in the
+`PipelineOptions`:
 
     options.setStreaming(true);
-
-That's it. If you prefer batched execution, simply disable streaming mode.
 
 ## Batch
 
 ### Batch optimization
 
-Flink gives you out-of-core algorithms which operate on its managed memory to perform sorting, 
+Flink gives you out-of-core algorithms which operate on its managed memory to perform sorting,
 caching, and hash table operations. We have optimized operations like CoGroup to use Flink's
 optimized out-of-core implementation.
 
@@ -72,11 +94,11 @@ To get started using the Flink Runner, we first need to install the latest versi
 
 To retrieve the latest version of Flink-Runner, run the following command
 
-    git clone https://github.com/apache/incubator-beam
+    git clone https://github.com/apache/beam
 
 Then switch to the newly created directory and run Maven to build the Beam runner:
 
-    cd incubator-beam
+    cd beam
     mvn clean install -DskipTests
 
 Flink-Runner is now installed in your local maven repository.
@@ -85,37 +107,42 @@ Flink-Runner is now installed in your local maven repository.
 
 Next, let's run the classic WordCount example. It's semantically identically to
 the example provided with Apache Beam. Only this time, we chose the
-`FlinkPipelineRunner` to execute the WordCount on top of Flink.
+`FlinkRunner` to execute the WordCount on top of Flink.
 
-Here's an excerpt from the WordCount class file:
+Here's an excerpt from the [WordCount class file](examples/src/main/java/org/apache/beam/runners/flink/examples/WordCount.java):
 
 ```java
-Options options = PipelineOptionsFactory.fromArgs(args).as(Options.class);
+Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
+
 // yes, we want to run WordCount with Flink
-options.setRunner(FlinkPipelineRunner.class);
+options.setRunner(FlinkRunner.class);
 
 Pipeline p = Pipeline.create(options);
 
-p.apply(TextIO.Read.named("ReadLines").from(options.getInput()))
-		.apply(new CountWords())
-		.apply(TextIO.Write.named("WriteCounts")
-				.to(options.getOutput())
-				.withNumShards(options.getNumShards()));
+p.apply("ReadLines", TextIO.Read.from(options.getInput()))
+    .apply(new CountWords())
+    .apply(MapElements.via(new FormatAsTextFn()))
+    .apply("WriteCounts", TextIO.Write.to(options.getOutput()));
 
 p.run();
 ```
 
 To execute the example, let's first get some sample data:
 
-    curl http://www.gutenberg.org/cache/epub/1128/pg1128.txt > examples/kinglear.txt
+    cd runners/flink/examples
+    curl http://www.gutenberg.org/cache/epub/1128/pg1128.txt > kinglear.txt
 
 Then let's run the included WordCount locally on your machine:
 
-    cd examples
-    mvn exec:exec -Dinput=kinglear.txt -Doutput=wordcounts.txt
+    cd runners/flink/examples
+    mvn exec:java -Dexec.mainClass=org.apache.beam.runners.flink.examples.WordCount \
+                  -Dinput=kinglear.txt -Doutput=wordcounts.txt
 
 Congratulations, you have run your first Apache Beam program on top of Apache Flink!
 
+Note, that you will find a number of `wordcounts*` output files because Flink parallelizes the
+WordCount computation. You may pass an additional `-Dparallelism=1` to disable parallelization and
+get a single `wordcounts.txt` file.
 
 # Running Beam programs on a Flink cluster
 
@@ -125,7 +152,7 @@ Maven project.
     mvn archetype:generate -DgroupId=com.mycompany.beam -DartifactId=beam-test \
         -DarchetypeArtifactId=maven-archetype-quickstart -DinteractiveMode=false
 
-The contents of the root `pom.xml` should be slightly changed aftewards (explanation below):
+The contents of the root `pom.xml` should be slightly changed afterwards (explanation below):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -141,9 +168,17 @@ The contents of the root `pom.xml` should be slightly changed aftewards (explana
   <dependencies>
     <dependency>
       <groupId>org.apache.beam</groupId>
-      <artifactId>flink-runner_2.10</artifactId>
-      <version>0.4-SNAPSHOT</version>
+      <artifactId>beam-runners-flink_2.10</artifactId>
+      <version>0.2.0-SNAPSHOT</version>
     </dependency>
+
+    <!-- Uncomment, if you want to use Flink's Kafka connector -->
+    <!--<dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-kafka-0.8_2.10</artifactId>
+      <version>1.0.3</version>
+    </dependency>-->
+
   </dependencies>
 
   <build>
@@ -164,14 +199,26 @@ The contents of the root `pom.xml` should be slightly changed aftewards (explana
                   <mainClass>org.apache.beam.runners.flink.examples.WordCount</mainClass>
                 </transformer>
               </transformers>
-              <artifactSet>
-                <excludes>
-                  <exclude>org.apache.flink:*</exclude>
-                </excludes>
-              </artifactSet>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/LICENSE</exclude>
+                  </excludes>
+                </filter>
+              </filters>
             </configuration>
           </execution>
         </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <source>1.7</source>
+          <target>1.7</target>
+        </configuration>
       </plugin>
 
     </plugins>

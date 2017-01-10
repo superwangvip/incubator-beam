@@ -17,26 +17,21 @@
  */
 package org.apache.beam.sdk.util;
 
-import org.apache.beam.sdk.coders.ByteArrayCoder;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.StandardCoder;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.values.PCollection;
-
-import com.google.common.base.MoreObjects;
-import com.google.common.base.Preconditions;
+import static com.google.common.base.Preconditions.checkArgument;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
+import com.google.common.base.MoreObjects;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import org.apache.beam.sdk.coders.ByteArrayCoder;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.StandardCoder;
+import org.apache.beam.sdk.transforms.DoFn;
 
 /**
  * Immutable struct containing a value as well as a unique id identifying the value.
@@ -99,8 +94,7 @@ public class ValueWithRecordId<ValueT> {
     public static <ValueT> ValueWithRecordIdCoder<ValueT> of(
          @JsonProperty(PropertyNames.COMPONENT_ENCODINGS)
         List<Coder<ValueT>> components) {
-      Preconditions.checkArgument(components.size() == 1,
-          "Expecting 1 component, got " + components.size());
+      checkArgument(components.size() == 1, "Expecting 1 component, got %s", components.size());
       return of(components.get(0));
     }
 
@@ -142,15 +136,11 @@ public class ValueWithRecordId<ValueT> {
     ByteArrayCoder idCoder;
   }
 
-  public static <T>
-      PTransform<PCollection<? extends ValueWithRecordId<T>>, PCollection<T>> stripIds() {
-    return ParDo.named("StripIds")
-        .of(
-            new DoFn<ValueWithRecordId<T>, T>() {
-              @Override
-              public void processElement(ProcessContext c) {
-                c.output(c.element().getValue());
-              }
-            });
+  /** {@link DoFn} to turn a {@code ValueWithRecordId<T>} back to the value {@code T}. */
+  public static class StripIdsDoFn<T> extends DoFn<ValueWithRecordId<T>, T> {
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      c.output(c.element().getValue());
+    }
   }
 }

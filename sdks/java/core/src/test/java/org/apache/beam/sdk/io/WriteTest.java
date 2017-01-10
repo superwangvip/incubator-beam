@@ -18,15 +18,29 @@
 package org.apache.beam.sdk.io;
 
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
-import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.includesDisplayDataFrom;
-
+import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.includesDisplayDataFor;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 
+import com.google.common.base.MoreObjects;
+import com.google.common.base.Optional;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.SerializableCoder;
@@ -35,8 +49,9 @@ import org.apache.beam.sdk.io.Sink.WriteOperation;
 import org.apache.beam.sdk.io.Sink.Writer;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.PipelineOptionsFactoryTest.TestPipelineOptions;
+import org.apache.beam.sdk.testing.NeedsRunner;
+import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
@@ -44,39 +59,40 @@ import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SimpleFunction;
+import org.apache.beam.sdk.transforms.ToString;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Sessions;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.common.base.MoreObjects;
-
+import org.hamcrest.Matchers;
 import org.joda.time.Duration;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Tests for the Write PTransform.
  */
 @RunWith(JUnit4.class)
 public class WriteTest {
+  @Rule public final TestPipeline p = TestPipeline.create();
+  @Rule public ExpectedException thrown = ExpectedException.none();
+
   // Static store that can be accessed within the writer
   private static List<String> sinkContents = new ArrayList<>();
+  // Static count of output shards
+  private static AtomicInteger numShards = new AtomicInteger(0);
+  // Static counts of the number of records per shard.
+  private static List<Integer> recordsPerShard = new ArrayList<>();
 
-  private static final MapElements<String, String> IDENTITY_MAP =
+  @SuppressWarnings("unchecked") // covariant cast
+  private static final PTransform<PCollection<String>, PCollection<String>> IDENTITY_MAP =
+      (PTransform)
       MapElements.via(new SimpleFunction<String, String>() {
         @Override
         public String apply(String input) {
@@ -91,15 +107,17 @@ public class WriteTest {
     }
 
     private static class AddArbitraryKey<T> extends DoFn<T, KV<Integer, T>> {
-      @Override
-      public void processElement(ProcessContext c) throws Exception {
+
+      @ProcessElement
+      public void processElement(ProcessContext c) {
         c.output(KV.of(ThreadLocalRandom.current().nextInt(), c.element()));
       }
     }
 
     private static class RemoveArbitraryKey<T> extends DoFn<KV<Integer, Iterable<T>>, T> {
-      @Override
-      public void processElement(ProcessContext c) throws Exception {
+
+      @ProcessElement
+      public void processElement(ProcessContext c) {
         for (T s : c.element().getValue()) {
           c.output(s);
         }
@@ -107,7 +125,7 @@ public class WriteTest {
     }
 
     @Override
-    public PCollection<T> apply(PCollection<T> input) {
+    public PCollection<T> expand(PCollection<T> input) {
       return input
           .apply(window)
           .apply(ParDo.of(new AddArbitraryKey<T>()))
@@ -120,6 +138,7 @@ public class WriteTest {
    * Test a Write transform with a PCollection of elements.
    */
   @Test
+  @Category(NeedsRunner.class)
   public void testWrite() {
     List<String> inputs = Arrays.asList("Critical canary", "Apprehensive eagle",
         "Intimidating pigeon", "Pedantic gull", "Frisky finch");
@@ -127,9 +146,78 @@ public class WriteTest {
   }
 
   /**
+   * Test that Write with an empty input still produces one shard.
+   */
+  @Test
+  @Category(NeedsRunner.class)
+  public void testEmptyWrite() {
+    runWrite(Collections.<String>emptyList(), IDENTITY_MAP);
+    // Note we did not request a sharded write, so runWrite will not validate the number of shards.
+    assertThat(numShards.intValue(), greaterThan(0));
+  }
+
+  /**
+   * Test that Write with a configured number of shards produces the desired number of shards even
+   * when there are many elements.
+   */
+  @Test
+  @Category(NeedsRunner.class)
+  public void testShardedWrite() {
+    runShardedWrite(
+        Arrays.asList("one", "two", "three", "four", "five", "six"),
+        IDENTITY_MAP,
+        Optional.of(1));
+  }
+
+  /**
+   * Test that Write with a configured number of shards produces the desired number of shards even
+   * when there are too few elements.
+   */
+  @Test
+  @Category(NeedsRunner.class)
+  public void testExpandShardedWrite() {
+    runShardedWrite(
+        Arrays.asList("one", "two", "three", "four", "five", "six"),
+        IDENTITY_MAP,
+        Optional.of(20));
+  }
+
+  /**
+   * Tests that a Write can balance many elements.
+   */
+  @Test
+  @Category(NeedsRunner.class)
+  public void testShardedWriteBalanced() {
+    int numElements = 1000;
+    List<String> inputs = new ArrayList<>(numElements);
+    for (int i = 0; i < numElements; ++i) {
+      inputs.add(String.format("elt%04d", i));
+    }
+
+    int numShards = 10;
+    runShardedWrite(
+        inputs,
+        new WindowAndReshuffle<>(
+            Window.<String>into(Sessions.withGapDuration(Duration.millis(1)))),
+        Optional.of(numShards));
+
+    // Check that both the min and max number of results per shard are close to the expected.
+    int min = Integer.MAX_VALUE;
+    int max = Integer.MIN_VALUE;
+    for (Integer i : recordsPerShard) {
+      min = Math.min(min, i);
+      max = Math.max(max, i);
+    }
+    double expected = numElements / (double) numShards;
+    assertThat((double) min, Matchers.greaterThanOrEqualTo(expected * 0.6));
+    assertThat((double) max, Matchers.lessThanOrEqualTo(expected * 1.4));
+  }
+
+  /**
    * Test a Write transform with an empty PCollection.
    */
   @Test
+  @Category(NeedsRunner.class)
   public void testWriteWithEmptyPCollection() {
     List<String> inputs = new ArrayList<>();
     runWrite(inputs, IDENTITY_MAP);
@@ -139,24 +227,41 @@ public class WriteTest {
    * Test a Write with a windowed PCollection.
    */
   @Test
+  @Category(NeedsRunner.class)
   public void testWriteWindowed() {
     List<String> inputs = Arrays.asList("Critical canary", "Apprehensive eagle",
         "Intimidating pigeon", "Pedantic gull", "Frisky finch");
     runWrite(
-        inputs, new WindowAndReshuffle(Window.<String>into(FixedWindows.of(Duration.millis(2)))));
+        inputs, new WindowAndReshuffle<>(Window.<String>into(FixedWindows.of(Duration.millis(2)))));
   }
 
   /**
    * Test a Write with sessions.
    */
   @Test
+  @Category(NeedsRunner.class)
   public void testWriteWithSessions() {
     List<String> inputs = Arrays.asList("Critical canary", "Apprehensive eagle",
         "Intimidating pigeon", "Pedantic gull", "Frisky finch");
 
     runWrite(
         inputs,
-        new WindowAndReshuffle(Window.<String>into(Sessions.withGapDuration(Duration.millis(1)))));
+        new WindowAndReshuffle<>(
+            Window.<String>into(Sessions.withGapDuration(Duration.millis(1)))));
+  }
+
+  @Test
+  public void testBuildWrite() {
+    Sink<String> sink = new TestSink() {};
+    Write.Bound<String> write = Write.to(sink).withNumShards(3);
+    assertEquals(3, write.getNumShards());
+    assertThat(write.getSink(), is(sink));
+
+    Write.Bound<String> write2 = write.withNumShards(7);
+    assertEquals(7, write2.getNumShards());
+    assertThat(write2.getSink(), is(sink));
+    // original unchanged
+    assertEquals(3, write.getNumShards());
   }
 
   @Test
@@ -171,10 +276,34 @@ public class WriteTest {
     DisplayData displayData = DisplayData.from(write);
 
     assertThat(displayData, hasDisplayItem("sink", sink.getClass()));
-    assertThat(displayData, includesDisplayDataFrom(sink));
+    assertThat(displayData, includesDisplayDataFor("sink", sink));
   }
 
+  @Test
+  public void testShardedDisplayData() {
+    TestSink sink = new TestSink() {
+      @Override
+      public void populateDisplayData(DisplayData.Builder builder) {
+        builder.add(DisplayData.item("foo", "bar"));
+      }
+    };
+    Write.Bound<String> write = Write.to(sink).withNumShards(1);
+    DisplayData displayData = DisplayData.from(write);
+    assertThat(displayData, hasDisplayItem("sink", sink.getClass()));
+    assertThat(displayData, includesDisplayDataFor("sink", sink));
+    assertThat(displayData, hasDisplayItem("numShards", 1));
+  }
 
+  @Test
+  public void testWriteUnbounded() {
+    PCollection<String> unbounded = p.apply(CountingInput.unbounded())
+        .apply(ToString.<Long>element());
+
+    TestSink sink = new TestSink();
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage("Write can only be applied to a Bounded PCollection");
+    unbounded.apply(Write.to(sink));
+  }
 
   /**
    * Performs a Write transform and verifies the Write transform calls the appropriate methods on
@@ -183,13 +312,29 @@ public class WriteTest {
    */
   private static void runWrite(
       List<String> inputs, PTransform<PCollection<String>, PCollection<String>> transform) {
+    runShardedWrite(inputs, transform, Optional.<Integer>absent());
+  }
+
+  /**
+   * Performs a Write transform with the desired number of shards. Verifies the Write transform
+   * calls the appropriate methods on a test sink in the correct order, as well as verifies that
+   * the elements of a PCollection are written to the sink. If numConfiguredShards is not null, also
+   * verifies that the output number of shards is correct.
+   */
+  private static void runShardedWrite(
+      List<String> inputs, PTransform<PCollection<String>, PCollection<String>> transform,
+      Optional<Integer> numConfiguredShards) {
     // Flag to validate that the pipeline options are passed to the Sink
-    String[] args = {"--testFlag=test_value"};
-    PipelineOptions options = PipelineOptionsFactory.fromArgs(args).as(WriteOptions.class);
-    Pipeline p = Pipeline.create(options);
+    WriteOptions options = TestPipeline.testingPipelineOptions().as(WriteOptions.class);
+    options.setTestFlag("test_value");
+    Pipeline p = TestPipeline.create(options);
 
     // Clear the sink's contents.
     sinkContents.clear();
+    // Reset the number of shards produced.
+    numShards.set(0);
+    // Reset the number of records in each shard.
+    recordsPerShard.clear();
 
     // Prepare timestamps for the elements.
     List<Long> timestamps = new ArrayList<>();
@@ -198,13 +343,21 @@ public class WriteTest {
     }
 
     TestSink sink = new TestSink();
+    Write.Bound<String> write = Write.to(sink);
+    if (numConfiguredShards.isPresent()) {
+      write = write.withNumShards(numConfiguredShards.get());
+    }
     p.apply(Create.timestamped(inputs, timestamps).withCoder(StringUtf8Coder.of()))
      .apply(transform)
-     .apply(Write.to(sink));
+     .apply(write);
 
     p.run();
     assertThat(sinkContents, containsInAnyOrder(inputs.toArray()));
     assertTrue(sink.hasCorrectState());
+    if (numConfiguredShards.isPresent()) {
+      assertEquals(numConfiguredShards.get().intValue(), numShards.intValue());
+      assertEquals(numConfiguredShards.get().intValue(), recordsPerShard.size());
+    }
   }
 
   // Test sink and associated write operation and writer. TestSink, TestWriteOperation, and
@@ -241,10 +394,7 @@ public class WriteTest {
      */
     @Override
     public boolean equals(Object other) {
-      if (!(other instanceof TestSink)) {
-        return false;
-      }
-      return true;
+      return (other instanceof TestSink);
     }
 
     @Override
@@ -309,6 +459,7 @@ public class WriteTest {
         idSet.add(result.uId);
         // Add the elements that were written to the sink's contents.
         sinkContents.addAll(result.elementsWritten);
+        recordsPerShard.add(result.elementsWritten.size());
       }
       // Each result came from a unique id.
       assertEquals(resultCount, idSet.size());
@@ -393,6 +544,7 @@ public class WriteTest {
 
     @Override
     public void open(String uId) throws Exception {
+      numShards.incrementAndGet();
       this.uId = uId;
       assertEquals(State.INITIAL, state);
       state = State.OPENED;
@@ -416,10 +568,9 @@ public class WriteTest {
   /**
    * Options for test, exposed for PipelineOptionsFactory.
    */
-  public static interface WriteOptions extends TestPipelineOptions {
+  public interface WriteOptions extends TestPipelineOptions {
     @Description("Test flag and value")
     String getTestFlag();
-
     void setTestFlag(String value);
   }
 }

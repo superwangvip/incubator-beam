@@ -18,12 +18,14 @@
 package org.apache.beam.sdk.transforms;
 
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
-
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import org.apache.beam.sdk.Pipeline;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -31,7 +33,6 @@ import org.apache.beam.sdk.transforms.Partition.PartitionFn;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
-
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -39,16 +40,13 @@ import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
-
 /**
  * Tests for {@link Partition}.
  */
 @RunWith(JUnit4.class)
 public class PartitionTest implements Serializable {
 
+  @Rule public final transient TestPipeline pipeline = TestPipeline.create();
   @Rule public transient ExpectedException thrown = ExpectedException.none();
 
   static class ModFn implements PartitionFn<Integer> {
@@ -65,10 +63,10 @@ public class PartitionTest implements Serializable {
     }
   }
 
+
   @Test
   @Category(RunnableOnService.class)
   public void testEvenOddPartition() {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollectionList<Integer> outputs = pipeline
         .apply(Create.of(591, 11789, 1257, 24578, 24799, 307))
@@ -81,8 +79,8 @@ public class PartitionTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testModPartition() {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollectionList<Integer> outputs = pipeline
         .apply(Create.of(1, 2, 4, 5))
@@ -95,8 +93,8 @@ public class PartitionTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testOutOfBoundsPartitions() {
-    Pipeline pipeline = TestPipeline.create();
 
     pipeline
     .apply(Create.of(-1))
@@ -110,7 +108,6 @@ public class PartitionTest implements Serializable {
 
   @Test
   public void testZeroNumPartitions() {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollection<Integer> input = pipeline.apply(Create.of(591));
 
@@ -120,8 +117,8 @@ public class PartitionTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testDroppedPartition() {
-    Pipeline pipeline = TestPipeline.create();
 
     // Compute the set of integers either 1 or 2 mod 3, the hard way.
     PCollectionList<Integer> outputs = pipeline

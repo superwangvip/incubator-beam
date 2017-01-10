@@ -17,15 +17,15 @@
  */
 package org.apache.beam.runners.flink;
 
+import com.google.common.base.Joiner;
+import java.io.File;
+import java.net.URI;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.CountingInput;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.common.base.Joiner;
-
 import org.apache.flink.test.util.JavaProgramTestBase;
 
 /**
@@ -44,6 +44,13 @@ public class ReadSourceITCase extends JavaProgramTestBase {
   @Override
   protected void preSubmit() throws Exception {
     resultPath = getTempDirPath("result");
+
+    // need to create the dir, otherwise Beam sinks don't
+    // work for these tests
+
+    if (!new File(new URI(resultPath)).mkdirs()) {
+      throw new RuntimeException("Could not create output dir.");
+    }
   }
 
   @Override
@@ -56,20 +63,20 @@ public class ReadSourceITCase extends JavaProgramTestBase {
     runProgram(resultPath);
   }
 
-  private static void runProgram(String resultPath) {
+  private static void runProgram(String resultPath) throws Exception {
 
     Pipeline p = FlinkTestPipeline.createForBatch();
 
     PCollection<String> result = p
         .apply(CountingInput.upTo(10))
         .apply(ParDo.of(new DoFn<Long, String>() {
-          @Override
+          @ProcessElement
           public void processElement(ProcessContext c) throws Exception {
             c.output(c.element().toString());
           }
         }));
 
-    result.apply(TextIO.Write.to(resultPath));
+    result.apply(TextIO.Write.to(new URI(resultPath).getPath() + "/part"));
 
     p.run();
   }

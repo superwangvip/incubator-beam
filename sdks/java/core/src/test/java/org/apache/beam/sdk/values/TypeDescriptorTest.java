@@ -20,17 +20,15 @@ package org.apache.beam.sdk.values;
 import static org.junit.Assert.assertEquals;
 
 import com.google.common.reflect.TypeToken;
-
+import java.lang.reflect.Method;
+import java.lang.reflect.TypeVariable;
+import java.util.List;
+import java.util.Set;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.lang.reflect.Method;
-import java.lang.reflect.TypeVariable;
-import java.util.List;
-import java.util.Set;
 
 /**
  * Tests for TypeDescriptor.
@@ -50,8 +48,13 @@ public class TypeDescriptorTest {
 
   @Test
   public void testTypeDescriptorImmediate() throws Exception {
-    TypeDescriptor<String> descriptor = new TypeDescriptor<String>(){};
-    assertEquals(String.class, descriptor.getRawType());
+    assertEquals(Boolean.class, new TypeDescriptor<Boolean>() {}.getRawType());
+    assertEquals(Double.class, new TypeDescriptor<Double>() {}.getRawType());
+    assertEquals(Float.class, new TypeDescriptor<Float>() {}.getRawType());
+    assertEquals(Integer.class, new TypeDescriptor<Integer>() {}.getRawType());
+    assertEquals(Long.class, new TypeDescriptor<Long>() {}.getRawType());
+    assertEquals(Short.class, new TypeDescriptor<Short>() {}.getRawType());
+    assertEquals(String.class, new TypeDescriptor<String>() {}.getRawType());
   }
 
   @Test
@@ -190,5 +193,17 @@ public class TypeDescriptorTest {
     assertEquals(
         new TypeToken<List<Set<String>>>() {}.getType(),
         rememberer.descriptorByInstance.getType());
+  }
+
+  @Test
+  public void testWhere() throws Exception {
+    useWhereMethodToDefineTypeParam(new TypeDescriptor<String>() {});
+  }
+
+  private <T> void useWhereMethodToDefineTypeParam(TypeDescriptor<T> parameterType) {
+    TypeDescriptor<Set<T>> typeDescriptor = new TypeDescriptor<Set<T>>() {}.where(
+        new TypeParameter<T>() {}, parameterType);
+    assertEquals(new TypeToken<Set<String>>() {}.getType(),
+        typeDescriptor.getType());
   }
 }

@@ -17,15 +17,14 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.VarInt;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
-
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UTFDataFormatException;
+import org.apache.beam.sdk.util.VarInt;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link Coder} that encodes {@link Integer Integers} using between 1 and 5 bytes. Negative
@@ -41,8 +40,8 @@ public class VarIntCoder extends AtomicCoder<Integer> {
 
   /////////////////////////////////////////////////////////////////////////////
 
-  private static final VarIntCoder INSTANCE =
-      new VarIntCoder();
+  private static final VarIntCoder INSTANCE = new VarIntCoder();
+  private static final TypeDescriptor<Integer> TYPE_DESCRIPTOR = new TypeDescriptor<Integer>() {};
 
   private VarIntCoder() {}
 
@@ -85,6 +84,11 @@ public class VarIntCoder extends AtomicCoder<Integer> {
   @Override
   public boolean isRegisterByteSizeObserverCheap(Integer value, Context context) {
     return true;
+  }
+
+  @Override
+  public TypeDescriptor<Integer> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 
   @Override

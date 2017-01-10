@@ -17,34 +17,36 @@
  */
 package org.apache.beam.runners.flink;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
+import java.util.List;
 import org.apache.beam.runners.flink.translation.FlinkBatchPipelineTranslator;
 import org.apache.beam.runners.flink.translation.FlinkPipelineTranslator;
 import org.apache.beam.runners.flink.translation.FlinkStreamingPipelineTranslator;
+import org.apache.beam.runners.flink.translation.PipelineTranslationOptimizer;
+import org.apache.beam.runners.flink.translation.TranslationMode;
 import org.apache.beam.sdk.Pipeline;
-
-import com.google.common.base.Preconditions;
-
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.java.CollectionEnvironment;
 import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
-
 /**
  * The class that instantiates and manages the execution of a given job.
  * Depending on if the job is a Streaming or Batch processing one, it creates
- * the adequate execution environment ({@link ExecutionEnvironment} or {@link StreamExecutionEnvironment}),
- * the necessary {@link FlinkPipelineTranslator} ({@link FlinkBatchPipelineTranslator} or
- * {@link FlinkStreamingPipelineTranslator})to transform the Beam job into a Flink one, and
- * executes the (translated) job.
+ * the adequate execution environment ({@link ExecutionEnvironment}
+ * or {@link StreamExecutionEnvironment}), the necessary {@link FlinkPipelineTranslator}
+ * ({@link FlinkBatchPipelineTranslator} or {@link FlinkStreamingPipelineTranslator}) to
+ * transform the Beam job into a Flink one, and executes the (translated) job.
  */
 public class FlinkPipelineExecutionEnvironment {
 
-  private static final Logger LOG = LoggerFactory.getLogger(FlinkPipelineExecutionEnvironment.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(FlinkPipelineExecutionEnvironment.class);
 
   private final FlinkPipelineOptions options;
 
@@ -57,7 +59,6 @@ public class FlinkPipelineExecutionEnvironment {
    */
   private ExecutionEnvironment flinkBatchEnv;
 
-
   /**
    * The Flink Streaming execution environment. This is instantiated to either a
    * {@link org.apache.flink.streaming.api.environment.LocalStreamEnvironment} or
@@ -67,91 +68,56 @@ public class FlinkPipelineExecutionEnvironment {
   private StreamExecutionEnvironment flinkStreamEnv;
 
   /**
-   * Translator for this FlinkPipelineRunner. Its role is to translate the Beam operators to
-   * their Flink counterparts. Based on the options provided by the user, if we have a streaming job,
-   * this is instantiated as a {@link FlinkStreamingPipelineTranslator}. In other case, i.e. a batch job,
-   * a {@link FlinkBatchPipelineTranslator} is created.
-   */
-  private FlinkPipelineTranslator flinkPipelineTranslator;
-
-  /**
    * Creates a {@link FlinkPipelineExecutionEnvironment} with the user-specified parameters in the
    * provided {@link FlinkPipelineOptions}.
    *
    * @param options the user-defined pipeline options.
    * */
-  public FlinkPipelineExecutionEnvironment(FlinkPipelineOptions options) {
-    this.options = Preconditions.checkNotNull(options);
-    this.createPipelineExecutionEnvironment();
-    this.createPipelineTranslator();
-  }
-
-  /**
-   * Depending on the type of job (Streaming or Batch) and the user-specified options,
-   * this method creates the adequate ExecutionEnvironment.
-   */
-  private void createPipelineExecutionEnvironment() {
-    if (options.isStreaming()) {
-      createStreamExecutionEnvironment();
-    } else {
-      createBatchExecutionEnvironment();
-    }
-  }
-
-  /**
-   * Depending on the type of job (Streaming or Batch), this method creates the adequate job graph
-   * translator. In the case of batch, it will work with {@link org.apache.flink.api.java.DataSet},
-   * while for streaming, it will work with {@link org.apache.flink.streaming.api.datastream.DataStream}.
-   */
-  private void createPipelineTranslator() {
-    checkInitializationState();
-    if (this.flinkPipelineTranslator != null) {
-      throw new IllegalStateException("FlinkPipelineTranslator already initialized.");
-    }
-
-    this.flinkPipelineTranslator = options.isStreaming() ?
-        new FlinkStreamingPipelineTranslator(flinkStreamEnv, options) :
-        new FlinkBatchPipelineTranslator(flinkBatchEnv, options);
+  FlinkPipelineExecutionEnvironment(FlinkPipelineOptions options) {
+    this.options = checkNotNull(options);
   }
 
   /**
    * Depending on if the job is a Streaming or a Batch one, this method creates
    * the necessary execution environment and pipeline translator, and translates
    * the {@link org.apache.beam.sdk.values.PCollection} program into
-   * a {@link org.apache.flink.api.java.DataSet} or {@link org.apache.flink.streaming.api.datastream.DataStream}
-   * one.
+   * a {@link org.apache.flink.api.java.DataSet}
+   * or {@link org.apache.flink.streaming.api.datastream.DataStream} one.
    * */
   public void translate(Pipeline pipeline) {
-    checkInitializationState();
-    if(this.flinkBatchEnv == null && this.flinkStreamEnv == null) {
-      createPipelineExecutionEnvironment();
+    this.flinkBatchEnv = null;
+    this.flinkStreamEnv = null;
+
+    PipelineTranslationOptimizer optimizer =
+        new PipelineTranslationOptimizer(TranslationMode.BATCH, options);
+
+    optimizer.translate(pipeline);
+    TranslationMode translationMode = optimizer.getTranslationMode();
+
+    FlinkPipelineTranslator translator;
+    if (translationMode == TranslationMode.STREAMING) {
+      this.flinkStreamEnv = createStreamExecutionEnvironment();
+      translator = new FlinkStreamingPipelineTranslator(flinkStreamEnv, options);
+    } else {
+      this.flinkBatchEnv = createBatchExecutionEnvironment();
+      translator = new FlinkBatchPipelineTranslator(flinkBatchEnv, options);
     }
-    if (this.flinkPipelineTranslator == null) {
-      createPipelineTranslator();
-    }
-    this.flinkPipelineTranslator.translate(pipeline);
+
+    translator.translate(pipeline);
   }
 
   /**
    * Launches the program execution.
    * */
   public JobExecutionResult executePipeline() throws Exception {
-    if (options.isStreaming()) {
-      if (this.flinkStreamEnv == null) {
-        throw new RuntimeException("FlinkPipelineExecutionEnvironment not initialized.");
-      }
-      if (this.flinkPipelineTranslator == null) {
-        throw new RuntimeException("FlinkPipelineTranslator not initialized.");
-      }
-      return this.flinkStreamEnv.execute(options.getJobName());
+    final String jobName = options.getJobName();
+
+    if (flinkBatchEnv != null) {
+      return flinkBatchEnv.execute(jobName);
+    } else if (flinkStreamEnv != null) {
+      return flinkStreamEnv.execute(jobName);
     } else {
-      if (this.flinkBatchEnv == null) {
-        throw new RuntimeException("FlinkPipelineExecutionEnvironment not initialized.");
-      }
-      if (this.flinkPipelineTranslator == null) {
-        throw new RuntimeException("FlinkPipelineTranslator not initialized.");
-      }
-      return this.flinkBatchEnv.execute(options.getJobName());
+      throw new IllegalStateException("The Pipeline has not yet been translated.");
     }
   }
 
@@ -160,41 +126,46 @@ public class FlinkPipelineExecutionEnvironment {
    * Flink {@link org.apache.flink.api.java.ExecutionEnvironment} depending
    * on the user-specified options.
    */
-  private void createBatchExecutionEnvironment() {
-    if (this.flinkStreamEnv != null || this.flinkBatchEnv != null) {
-      throw new RuntimeException("FlinkPipelineExecutionEnvironment already initialized.");
-    }
+  private ExecutionEnvironment createBatchExecutionEnvironment() {
 
     LOG.info("Creating the required Batch Execution Environment.");
 
     String masterUrl = options.getFlinkMaster();
-    this.flinkStreamEnv = null;
+    ExecutionEnvironment flinkBatchEnv;
 
     // depending on the master, create the right environment.
     if (masterUrl.equals("[local]")) {
-      this.flinkBatchEnv = ExecutionEnvironment.createLocalEnvironment();
+      flinkBatchEnv = ExecutionEnvironment.createLocalEnvironment();
     } else if (masterUrl.equals("[collection]")) {
-      this.flinkBatchEnv = new CollectionEnvironment();
+      flinkBatchEnv = new CollectionEnvironment();
     } else if (masterUrl.equals("[auto]")) {
-      this.flinkBatchEnv = ExecutionEnvironment.getExecutionEnvironment();
+      flinkBatchEnv = ExecutionEnvironment.getExecutionEnvironment();
     } else if (masterUrl.matches(".*:\\d*")) {
       String[] parts = masterUrl.split(":");
       List<String> stagingFiles = options.getFilesToStage();
-      this.flinkBatchEnv = ExecutionEnvironment.createRemoteEnvironment(parts[0],
+      flinkBatchEnv = ExecutionEnvironment.createRemoteEnvironment(parts[0],
           Integer.parseInt(parts[1]),
           stagingFiles.toArray(new String[stagingFiles.size()]));
     } else {
       LOG.warn("Unrecognized Flink Master URL {}. Defaulting to [auto].", masterUrl);
-      this.flinkBatchEnv = ExecutionEnvironment.getExecutionEnvironment();
+      flinkBatchEnv = ExecutionEnvironment.getExecutionEnvironment();
     }
 
     // set the correct parallelism.
-    if (options.getParallelism() != -1 && !(this.flinkBatchEnv instanceof CollectionEnvironment)) {
-      this.flinkBatchEnv.setParallelism(options.getParallelism());
+    if (options.getParallelism() != -1 && !(flinkBatchEnv instanceof CollectionEnvironment)) {
+      flinkBatchEnv.setParallelism(options.getParallelism());
     }
 
     // set parallelism in the options (required by some execution code)
     options.setParallelism(flinkBatchEnv.getParallelism());
+
+    if (options.getObjectReuse()) {
+      flinkBatchEnv.getConfig().enableObjectReuse();
+    } else {
+      flinkBatchEnv.getConfig().disableObjectReuse();
+    }
+
+    return flinkBatchEnv;
   }
 
   /**
@@ -202,70 +173,74 @@ public class FlinkPipelineExecutionEnvironment {
    * Flink {@link org.apache.flink.streaming.api.environment.StreamExecutionEnvironment} depending
    * on the user-specified options.
    */
-  private void createStreamExecutionEnvironment() {
-    if (this.flinkStreamEnv != null || this.flinkBatchEnv != null) {
-      throw new RuntimeException("FlinkPipelineExecutionEnvironment already initialized.");
-    }
+  private StreamExecutionEnvironment createStreamExecutionEnvironment() {
 
     LOG.info("Creating the required Streaming Environment.");
 
     String masterUrl = options.getFlinkMaster();
-    this.flinkBatchEnv = null;
+    StreamExecutionEnvironment flinkStreamEnv = null;
 
     // depending on the master, create the right environment.
     if (masterUrl.equals("[local]")) {
-      this.flinkStreamEnv = StreamExecutionEnvironment.createLocalEnvironment();
+      flinkStreamEnv = StreamExecutionEnvironment.createLocalEnvironment();
     } else if (masterUrl.equals("[auto]")) {
-      this.flinkStreamEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+      flinkStreamEnv = StreamExecutionEnvironment.getExecutionEnvironment();
     } else if (masterUrl.matches(".*:\\d*")) {
       String[] parts = masterUrl.split(":");
       List<String> stagingFiles = options.getFilesToStage();
-      this.flinkStreamEnv = StreamExecutionEnvironment.createRemoteEnvironment(parts[0],
+      flinkStreamEnv = StreamExecutionEnvironment.createRemoteEnvironment(parts[0],
           Integer.parseInt(parts[1]), stagingFiles.toArray(new String[stagingFiles.size()]));
     } else {
       LOG.warn("Unrecognized Flink Master URL {}. Defaulting to [auto].", masterUrl);
-      this.flinkStreamEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+      flinkStreamEnv = StreamExecutionEnvironment.getExecutionEnvironment();
     }
 
     // set the correct parallelism.
     if (options.getParallelism() != -1) {
-      this.flinkStreamEnv.setParallelism(options.getParallelism());
+      flinkStreamEnv.setParallelism(options.getParallelism());
     }
 
     // set parallelism in the options (required by some execution code)
     options.setParallelism(flinkStreamEnv.getParallelism());
 
+    if (options.getObjectReuse()) {
+      flinkStreamEnv.getConfig().enableObjectReuse();
+    } else {
+      flinkStreamEnv.getConfig().disableObjectReuse();
+    }
+
     // default to event time
-    this.flinkStreamEnv.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+    flinkStreamEnv.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
     // for the following 2 parameters, a value of -1 means that Flink will use
     // the default values as specified in the configuration.
     int numRetries = options.getNumberOfExecutionRetries();
     if (numRetries != -1) {
-      this.flinkStreamEnv.setNumberOfExecutionRetries(numRetries);
+      flinkStreamEnv.setNumberOfExecutionRetries(numRetries);
     }
     long retryDelay = options.getExecutionRetryDelay();
     if (retryDelay != -1) {
-      this.flinkStreamEnv.getConfig().setExecutionRetryDelay(retryDelay);
+      flinkStreamEnv.getConfig().setExecutionRetryDelay(retryDelay);
     }
 
     // A value of -1 corresponds to disabled checkpointing (see CheckpointConfig in Flink).
     // If the value is not -1, then the validity checks are applied.
     // By default, checkpointing is disabled.
     long checkpointInterval = options.getCheckpointingInterval();
-    if(checkpointInterval != -1) {
+    if (checkpointInterval != -1) {
       if (checkpointInterval < 1) {
         throw new IllegalArgumentException("The checkpoint interval must be positive");
       }
-      this.flinkStreamEnv.enableCheckpointing(checkpointInterval);
+      flinkStreamEnv.enableCheckpointing(checkpointInterval);
     }
+
+    // State backend
+    final AbstractStateBackend stateBackend = options.getStateBackend();
+    if (stateBackend != null) {
+      flinkStreamEnv.setStateBackend(stateBackend);
+    }
+
+    return flinkStreamEnv;
   }
 
-  private void checkInitializationState() {
-    if (options.isStreaming() && this.flinkBatchEnv != null) {
-      throw new IllegalStateException("Attempted to run a Streaming Job with a Batch Execution Environment.");
-    } else if (!options.isStreaming() && this.flinkStreamEnv != null) {
-      throw new IllegalStateException("Attempted to run a Batch Job with a Streaming Execution Environment.");
-    }
-  }
 }

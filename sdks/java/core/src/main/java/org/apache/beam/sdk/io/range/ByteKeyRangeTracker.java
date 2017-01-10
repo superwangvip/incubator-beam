@@ -18,11 +18,12 @@
 package org.apache.beam.sdk.io.range;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static com.google.common.base.Preconditions.checkState;
 
 import javax.annotation.Nullable;
+import org.apache.beam.sdk.io.BoundedSource.BoundedReader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A {@link RangeTracker} for {@link ByteKey ByteKeys} in {@link ByteKeyRange ByteKeyRanges}.
@@ -31,11 +32,15 @@ import javax.annotation.Nullable;
  * @see ByteKeyRange
  */
 public final class ByteKeyRangeTracker implements RangeTracker<ByteKey> {
-  private static final Logger logger = LoggerFactory.getLogger(ByteKeyRangeTracker.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ByteKeyRangeTracker.class);
 
   /** Instantiates a new {@link ByteKeyRangeTracker} with the specified range. */
   public static ByteKeyRangeTracker of(ByteKeyRange range) {
     return new ByteKeyRangeTracker(range);
+  }
+
+  public synchronized boolean isDone() {
+    return done;
   }
 
   @Override
@@ -48,12 +53,35 @@ public final class ByteKeyRangeTracker implements RangeTracker<ByteKey> {
     return range.getEndKey();
   }
 
+  /** Returns the current range. */
+  public synchronized ByteKeyRange getRange() {
+    return range;
+  }
+
   @Override
   public synchronized boolean tryReturnRecordAt(boolean isAtSplitPoint, ByteKey recordStart) {
-    if (isAtSplitPoint && !range.containsKey(recordStart)) {
+    if (done) {
       return false;
     }
+
+    checkState(!(position == null && !isAtSplitPoint), "The first record must be at a split point");
+    checkState(!(recordStart.compareTo(range.getStartKey()) < 0),
+        "Trying to return record which is before the start key");
+    checkState(!(position != null && recordStart.compareTo(position) < 0),
+        "Trying to return record which is before the last-returned record");
+
+    if (position == null) {
+      range = range.withStartKey(recordStart);
+    }
     position = recordStart;
+
+    if (isAtSplitPoint) {
+      if (!range.containsKey(recordStart)) {
+        done = true;
+        return false;
+      }
+      ++splitPointsSeen;
+    }
     return true;
   }
 
@@ -61,7 +89,7 @@ public final class ByteKeyRangeTracker implements RangeTracker<ByteKey> {
   public synchronized boolean trySplitAtPosition(ByteKey splitPosition) {
     // Unstarted.
     if (position == null) {
-      logger.warn(
+      LOG.warn(
           "{}: Rejecting split request at {} because no records have been returned.",
           this,
           splitPosition);
@@ -70,7 +98,7 @@ public final class ByteKeyRangeTracker implements RangeTracker<ByteKey> {
 
     // Started, but not after current position.
     if (splitPosition.compareTo(position) <= 0) {
-      logger.warn(
+      LOG.warn(
           "{}: Rejecting split request at {} because it is not after current position {}.",
           this,
           splitPosition,
@@ -80,7 +108,7 @@ public final class ByteKeyRangeTracker implements RangeTracker<ByteKey> {
 
     // Sanity check.
     if (!range.containsKey(splitPosition)) {
-      logger.warn(
+      LOG.warn(
           "{}: Rejecting split request at {} because it is not within the range.",
           this,
           splitPosition);
@@ -99,17 +127,54 @@ public final class ByteKeyRangeTracker implements RangeTracker<ByteKey> {
     return range.estimateFractionForKey(position);
   }
 
+  public synchronized long getSplitPointsConsumed() {
+    if (position == null) {
+      return 0;
+    } else if (isDone()) {
+      return splitPointsSeen;
+    } else {
+      // There is a current split point, and it has not finished processing.
+      checkState(
+          splitPointsSeen > 0,
+          "A started rangeTracker should have seen > 0 split points (is %s)",
+          splitPointsSeen);
+      return splitPointsSeen - 1;
+    }
+  }
+
   ///////////////////////////////////////////////////////////////////////////////
   private ByteKeyRange range;
   @Nullable private ByteKey position;
+  private long splitPointsSeen;
+  private boolean done;
 
   private ByteKeyRangeTracker(ByteKeyRange range) {
     this.range = range;
-    this.position = null;
+    position = null;
+    splitPointsSeen = 0L;
+    done = false;
+  }
+
+  /**
+   * Marks this range tracker as being done. Specifically, this will mark the current split point,
+   * if one exists, as being finished.
+   *
+   * <p>Always returns false, so that it can be used in an implementation of
+   * {@link BoundedReader#start()} or {@link BoundedReader#advance()} as follows:
+   *
+   * <pre> {@code
+   * public boolean start() {
+   *   return startImpl() && rangeTracker.tryReturnRecordAt(isAtSplitPoint, position)
+   *       || rangeTracker.markDone();
+   * }} </pre>
+   */
+  public synchronized boolean markDone() {
+    done = true;
+    return false;
   }
 
   @Override
-  public String toString() {
+  public synchronized String toString() {
     return toStringHelper(ByteKeyRangeTracker.class)
         .add("range", range)
         .add("position", position)

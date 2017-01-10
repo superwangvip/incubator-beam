@@ -17,7 +17,15 @@
  */
 package org.apache.beam.examples;
 
-import org.apache.beam.sdk.Pipeline;
+import com.google.common.collect.ImmutableList;
+import java.io.IOException;
+import java.io.Serializable;
+import java.nio.channels.FileChannel;
+import java.nio.channels.SeekableByteChannel;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
+import java.util.List;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.options.GcsOptions;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -28,25 +36,14 @@ import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.util.GcsUtil;
 import org.apache.beam.sdk.util.gcsfs.GcsPath;
 import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.TypeDescriptor;
-
-import com.google.common.collect.ImmutableList;
-
+import org.apache.beam.sdk.values.TypeDescriptors;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
-
-import java.io.IOException;
-import java.io.Serializable;
-import java.nio.channels.FileChannel;
-import java.nio.channels.SeekableByteChannel;
-import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * To keep {@link MinimalWordCountJava8} simple, it is not factored or testable. This test
@@ -55,23 +52,25 @@ import java.util.List;
 @RunWith(JUnit4.class)
 public class MinimalWordCountJava8Test implements Serializable {
 
+  @Rule
+  public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
+
   /**
    * A basic smoke test that ensures there is no crash at pipeline construction time.
    */
   @Test
   public void testMinimalWordCountJava8() throws Exception {
-    Pipeline p = TestPipeline.create();
     p.getOptions().as(GcsOptions.class).setGcsUtil(buildMockGcsUtil());
 
-    p.apply(TextIO.Read.from("gs://dataflow-samples/shakespeare/*"))
+    p.apply(TextIO.Read.from("gs://apache-beam-samples/shakespeare/*"))
      .apply(FlatMapElements.via((String word) -> Arrays.asList(word.split("[^a-zA-Z']+")))
-         .withOutputType(new TypeDescriptor<String>() {}))
-     .apply(Filter.byPredicate((String word) -> !word.isEmpty()))
+         .withOutputType(TypeDescriptors.strings()))
+     .apply(Filter.by((String word) -> !word.isEmpty()))
      .apply(Count.<String>perElement())
      .apply(MapElements
          .via((KV<String, Long> wordCount) -> wordCount.getKey() + ": " + wordCount.getValue())
-         .withOutputType(new TypeDescriptor<String>() {}))
-     .apply(TextIO.Write.to("gs://YOUR_OUTPUT_BUCKET/AND_OUTPUT_PREFIX"));
+         .withOutputType(TypeDescriptors.strings()))
+     .apply(TextIO.Write.to("gs://your-output-bucket/and-output-prefix"));
   }
 
   private GcsUtil buildMockGcsUtil() throws IOException {

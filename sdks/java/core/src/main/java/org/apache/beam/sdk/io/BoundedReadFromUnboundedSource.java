@@ -17,43 +17,44 @@
  */
 package org.apache.beam.sdk.io;
 
-import static org.apache.beam.sdk.util.StringUtils.approximateSimpleName;
-
-import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.RemoveDuplicates;
-import org.apache.beam.sdk.transforms.SerializableFunction;
-import org.apache.beam.sdk.transforms.display.DisplayData;
-import org.apache.beam.sdk.util.IntervalBoundedExponentialBackOff;
-import org.apache.beam.sdk.util.ValueWithRecordId;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PInput;
-
 import com.google.api.client.util.BackOff;
 import com.google.common.util.concurrent.Uninterruptibles;
-
-import org.joda.time.Duration;
-import org.joda.time.Instant;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.TimeUnit;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.annotations.Experimental;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.transforms.Distinct;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.transforms.display.DisplayData;
+import org.apache.beam.sdk.util.FluentBackoff;
+import org.apache.beam.sdk.util.NameUtils;
+import org.apache.beam.sdk.util.ValueWithRecordId;
+import org.apache.beam.sdk.values.PBegin;
+import org.apache.beam.sdk.values.PCollection;
+import org.joda.time.Duration;
+import org.joda.time.Instant;
 
 
 /**
  * {@link PTransform} that reads a bounded amount of data from an {@link UnboundedSource},
  * specified as one or both of a maximum number of elements or a maximum period of time to read.
- *
- * <p>Created by {@link Read}.
  */
-class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T>> {
+public class BoundedReadFromUnboundedSource<T> extends PTransform<PBegin, PCollection<T>> {
   private final UnboundedSource<T, ?> source;
   private final long maxNumRecords;
   private final Duration maxReadTime;
+  private final BoundedSource<ValueWithRecordId<T>> adaptedSource;
+  private static final FluentBackoff BACKOFF_FACTORY =
+      FluentBackoff.DEFAULT
+          .withInitialBackoff(Duration.millis(10))
+          .withMaxBackoff(Duration.standardSeconds(10));
 
   /**
    * Returns a new {@link BoundedReadFromUnboundedSource} that reads a bounded amount
@@ -81,14 +82,24 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
     this.source = source;
     this.maxNumRecords = maxNumRecords;
     this.maxReadTime = maxReadTime;
+    this.adaptedSource = new UnboundedToBoundedSourceAdapter<>(source, maxNumRecords, maxReadTime);
+  }
+
+  /**
+   * Returns an adapted {@link BoundedSource} wrapping the underlying {@link UnboundedSource},
+   * with the specified bounds on number of records and read time.
+   */
+  @Experimental
+  public BoundedSource<ValueWithRecordId<T>> getAdaptedSource() {
+    return adaptedSource;
   }
 
   @Override
-  public PCollection<T> apply(PInput input) {
+  public PCollection<T> expand(PBegin input) {
     PCollection<ValueWithRecordId<T>> read = Pipeline.applyTransform(input,
-        Read.from(new UnboundedToBoundedSourceAdapter<>(source, maxNumRecords, maxReadTime)));
+        Read.from(getAdaptedSource()));
     if (source.requiresDeduping()) {
-      read = read.apply(RemoveDuplicates.withRepresentativeValueFn(
+      read = read.apply(Distinct.withRepresentativeValueFn(
           new SerializableFunction<ValueWithRecordId<T>, byte[]>() {
             @Override
             public byte[] apply(ValueWithRecordId<T> input) {
@@ -96,7 +107,7 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
             }
           }));
     }
-    return read.apply(ValueWithRecordId.<T>stripIds());
+    return read.apply("StripIds", ParDo.of(new ValueWithRecordId.StripIdsDoFn<T>()));
   }
 
   @Override
@@ -106,17 +117,20 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
 
   @Override
   public String getKindString() {
-    return "Read(" + approximateSimpleName(source.getClass()) + ")";
+    return String.format("Read(%s)", NameUtils.approximateSimpleName(source));
   }
 
   @Override
   public void populateDisplayData(DisplayData.Builder builder) {
     // We explicitly do not register base-class data, instead we use the delegate inner source.
     builder
-        .add(DisplayData.item("source", source.getClass()))
-        .addIfNotDefault(DisplayData.item("maxRecords", maxNumRecords), Long.MAX_VALUE)
-        .addIfNotNull(DisplayData.item("maxReadTime", maxReadTime))
-        .include(source);
+        .add(DisplayData.item("source", source.getClass())
+          .withLabel("Read Source"))
+        .addIfNotDefault(DisplayData.item("maxRecords", maxNumRecords)
+          .withLabel("Maximum Read Records"), Long.MAX_VALUE)
+        .addIfNotNull(DisplayData.item("maxReadTime", maxReadTime)
+          .withLabel("Maximum Read Time"))
+        .include("source", source);
   }
 
   private static class UnboundedToBoundedSourceAdapter<T>
@@ -179,11 +193,6 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
     }
 
     @Override
-    public boolean producesSortedKeys(PipelineOptions options) {
-      return false;
-    }
-
-    @Override
     public Coder<ValueWithRecordId<T>> getDefaultOutputCoder() {
       return ValueWithRecordId.ValueWithRecordIdCoder.of(source.getDefaultOutputCoder());
     }
@@ -194,8 +203,14 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
     }
 
     @Override
-    public BoundedReader<ValueWithRecordId<T>> createReader(PipelineOptions options) {
+    public BoundedReader<ValueWithRecordId<T>> createReader(PipelineOptions options)
+        throws IOException {
       return new Reader(source.createReader(options, null));
+    }
+
+    @Override
+    public void populateDisplayData(DisplayData.Builder builder) {
+      builder.delegate(source);
     }
 
     private class Reader extends BoundedReader<ValueWithRecordId<T>> {
@@ -239,7 +254,7 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
 
       private boolean advanceWithBackoff() throws IOException {
         // Try reading from the source with exponential backoff
-        BackOff backoff = new IntervalBoundedExponentialBackOff(10000L, 10L);
+        BackOff backoff = BACKOFF_FACTORY.backoff();
         long nextSleep = backoff.nextBackOffMillis();
         while (nextSleep != BackOff.STOP) {
           if (endTime != null && Instant.now().isAfter(endTime)) {

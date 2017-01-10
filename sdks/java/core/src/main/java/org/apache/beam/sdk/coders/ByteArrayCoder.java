@@ -17,17 +17,15 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.ExposedByteArrayOutputStream;
-import org.apache.beam.sdk.util.StreamUtils;
-import org.apache.beam.sdk.util.VarInt;
-
-import com.google.common.io.ByteStreams;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
-
+import com.google.common.io.ByteStreams;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import org.apache.beam.sdk.util.ExposedByteArrayOutputStream;
+import org.apache.beam.sdk.util.StreamUtils;
+import org.apache.beam.sdk.util.VarInt;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link Coder} for {@code byte[]}.
@@ -51,6 +49,7 @@ public class ByteArrayCoder extends AtomicCoder<byte[]> {
   /////////////////////////////////////////////////////////////////////////////
 
   private static final ByteArrayCoder INSTANCE = new ByteArrayCoder();
+  private static final TypeDescriptor<byte[]> TYPE_DESCRIPTOR = new TypeDescriptor<byte[]>() {};
 
   private ByteArrayCoder() {}
 
@@ -123,6 +122,11 @@ public class ByteArrayCoder extends AtomicCoder<byte[]> {
   @Override
   public boolean isRegisterByteSizeObserverCheap(byte[] value, Context context) {
     return true;
+  }
+
+  @Override
+  public TypeDescriptor<byte[]> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 
   @Override

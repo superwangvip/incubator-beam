@@ -19,19 +19,16 @@ package org.apache.beam.sdk.transforms;
 
 import static org.junit.Assert.assertEquals;
 
-import org.apache.beam.sdk.Pipeline;
+import java.io.Serializable;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.values.PCollectionList;
-
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
 
 /**
  * Java 8 Tests for {@link Filter}.
@@ -41,11 +38,14 @@ import java.io.Serializable;
 public class PartitionJava8Test implements Serializable {
 
   @Rule
+  public final transient TestPipeline pipeline = TestPipeline.create();
+
+  @Rule
   public transient ExpectedException thrown = ExpectedException.none();
 
   @Test
   public void testModPartition() {
-    Pipeline pipeline = TestPipeline.create();
+
 
     PCollectionList<Integer> outputs = pipeline
         .apply(Create.of(1, 2, 4, 5))
@@ -63,7 +63,6 @@ public class PartitionJava8Test implements Serializable {
    */
   @Test
   public void testPartitionFnOutputTypeDescriptorRaw() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollectionList<String> output = pipeline
         .apply(Create.of("hello"))

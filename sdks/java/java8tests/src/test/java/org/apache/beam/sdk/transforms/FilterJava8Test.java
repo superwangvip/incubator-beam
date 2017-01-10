@@ -17,21 +17,18 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import org.apache.beam.sdk.Pipeline;
+import java.io.Serializable;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.values.PCollection;
-
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
 
 /**
  * Java 8 Tests for {@link Filter}.
@@ -41,16 +38,18 @@ import java.io.Serializable;
 public class FilterJava8Test implements Serializable {
 
   @Rule
+  public final transient TestPipeline pipeline = TestPipeline.create();
+
+  @Rule
   public transient ExpectedException thrown = ExpectedException.none();
 
   @Test
   @Category(RunnableOnService.class)
   public void testIdentityFilterByPredicate() {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollection<Integer> output = pipeline
         .apply(Create.of(591, 11789, 1257, 24578, 24799, 307))
-        .apply(Filter.byPredicate(i -> true));
+        .apply(Filter.by(i -> true));
 
     PAssert.that(output).containsInAnyOrder(591, 11789, 1257, 24578, 24799, 307);
     pipeline.run();
@@ -58,11 +57,10 @@ public class FilterJava8Test implements Serializable {
 
   @Test
   public void testNoFilterByPredicate() {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollection<Integer> output = pipeline
         .apply(Create.of(1, 2, 4, 5))
-        .apply(Filter.byPredicate(i -> false));
+        .apply(Filter.by(i -> false));
 
     PAssert.that(output).empty();
     pipeline.run();
@@ -71,11 +69,10 @@ public class FilterJava8Test implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testFilterByPredicate() {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollection<Integer> output = pipeline
         .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
-        .apply(Filter.byPredicate(i -> i % 2 == 0));
+        .apply(Filter.by(i -> i % 2 == 0));
 
     PAssert.that(output).containsInAnyOrder(2, 4, 6);
     pipeline.run();
@@ -87,7 +84,6 @@ public class FilterJava8Test implements Serializable {
    */
   @Test
   public void testFilterParDoOutputTypeDescriptorRaw() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     PCollection<String> output = pipeline
@@ -101,11 +97,10 @@ public class FilterJava8Test implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testFilterByMethodReference() {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollection<Integer> output = pipeline
         .apply(Create.of(1, 2, 3, 4, 5, 6, 7))
-        .apply(Filter.byPredicate(new EvenFilter()::isEven));
+        .apply(Filter.by(new EvenFilter()::isEven));
 
     PAssert.that(output).containsInAnyOrder(2, 4, 6);
     pipeline.run();

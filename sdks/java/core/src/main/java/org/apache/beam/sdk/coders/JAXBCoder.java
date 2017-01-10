@@ -17,25 +17,22 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.CloudObject;
-import org.apache.beam.sdk.util.Structs;
-import org.apache.beam.sdk.util.VarInt;
-
-import com.google.common.io.ByteStreams;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
+import com.google.common.io.ByteStreams;
 import java.io.FilterInputStream;
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
 import javax.xml.bind.Marshaller;
 import javax.xml.bind.Unmarshaller;
+import org.apache.beam.sdk.util.CloudObject;
+import org.apache.beam.sdk.util.Structs;
+import org.apache.beam.sdk.util.VarInt;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A coder for JAXB annotated objects. This coder uses JAXB marshalling/unmarshalling mechanisms
@@ -46,8 +43,8 @@ import javax.xml.bind.Unmarshaller;
 public class JAXBCoder<T> extends AtomicCoder<T> {
 
   private final Class<T> jaxbClass;
-  private transient Marshaller jaxbMarshaller = null;
-  private transient Unmarshaller jaxbUnmarshaller = null;
+  private final TypeDescriptor<T> typeDescriptor;
+  private transient volatile JAXBContext jaxbContext;
 
   public Class<T> getJAXBClass() {
     return jaxbClass;
@@ -55,6 +52,7 @@ public class JAXBCoder<T> extends AtomicCoder<T> {
 
   private JAXBCoder(Class<T> jaxbClass) {
     this.jaxbClass = jaxbClass;
+    this.typeDescriptor = TypeDescriptor.of(jaxbClass);
   }
 
   /**
@@ -70,10 +68,9 @@ public class JAXBCoder<T> extends AtomicCoder<T> {
   public void encode(T value, OutputStream outStream, Context context)
       throws CoderException, IOException {
     try {
-      if (jaxbMarshaller == null) {
-        JAXBContext jaxbContext = JAXBContext.newInstance(jaxbClass);
-        jaxbMarshaller = jaxbContext.createMarshaller();
-      }
+      JAXBContext jaxbContext = getContext();
+      // TODO: Consider caching in a ThreadLocal if this impacts performance
+      Marshaller jaxbMarshaller = jaxbContext.createMarshaller();
       if (!context.isWholeStream) {
         try {
           long size = getEncodedElementByteSize(value, Context.OUTER);
@@ -95,10 +92,9 @@ public class JAXBCoder<T> extends AtomicCoder<T> {
   @Override
   public T decode(InputStream inStream, Context context) throws CoderException, IOException {
     try {
-      if (jaxbUnmarshaller == null) {
-        JAXBContext jaxbContext = JAXBContext.newInstance(jaxbClass);
-        jaxbUnmarshaller = jaxbContext.createUnmarshaller();
-      }
+      JAXBContext jaxbContext = getContext();
+      // TODO: Consider caching in a ThreadLocal if this impacts performance
+      Unmarshaller jaxbUnmarshaller = jaxbContext.createUnmarshaller();
 
       InputStream stream = inStream;
       if (!context.isWholeStream) {
@@ -113,9 +109,25 @@ public class JAXBCoder<T> extends AtomicCoder<T> {
     }
   }
 
+  private JAXBContext getContext() throws JAXBException {
+    if (jaxbContext == null) {
+      synchronized (this) {
+        if (jaxbContext == null) {
+          jaxbContext = JAXBContext.newInstance(jaxbClass);
+        }
+      }
+    }
+    return jaxbContext;
+  }
+
   @Override
   public String getEncodingId() {
     return getJAXBClass().getName();
+  }
+
+  @Override
+  public TypeDescriptor<T> getEncodedTypeDescriptor() {
+    return typeDescriptor;
   }
 
   private static class CloseIgnoringInputStream extends FilterInputStream {
@@ -163,8 +175,8 @@ public class JAXBCoder<T> extends AtomicCoder<T> {
   }
 
   @Override
-  public CloudObject asCloudObject() {
-    CloudObject result = super.asCloudObject();
+  protected CloudObject initializeCloudObject() {
+    CloudObject result = CloudObject.forClass(getClass());
     Structs.addString(result, JAXB_CLASS, jaxbClass.getName());
     return result;
   }

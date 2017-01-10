@@ -17,15 +17,14 @@
  */
 package org.apache.beam.sdk.coders;
 
-import com.google.api.services.bigquery.model.TableRow;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-
+import com.google.api.services.bigquery.model.TableRow;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link Coder} that encodes BigQuery {@link TableRow} objects in their native JSON format.
@@ -66,6 +65,7 @@ public class TableRowJsonCoder extends AtomicCoder<TableRow> {
       new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
 
   private static final TableRowJsonCoder INSTANCE = new TableRowJsonCoder();
+  private static final TypeDescriptor<TableRow> TYPE_DESCRIPTOR = new TypeDescriptor<TableRow>() {};
 
   private TableRowJsonCoder() { }
 
@@ -79,5 +79,10 @@ public class TableRowJsonCoder extends AtomicCoder<TableRow> {
   public void verifyDeterministic() throws NonDeterministicException {
     throw new NonDeterministicException(this,
         "TableCell can hold arbitrary instances, which may be non-deterministic.");
+  }
+
+  @Override
+  public TypeDescriptor<TableRow> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 }

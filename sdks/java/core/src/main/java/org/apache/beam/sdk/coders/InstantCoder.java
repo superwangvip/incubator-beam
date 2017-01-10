@@ -17,17 +17,14 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
-
-import com.google.common.base.Converter;
-
 import com.fasterxml.jackson.annotation.JsonCreator;
-
-import org.joda.time.Instant;
-
+import com.google.common.base.Converter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.joda.time.Instant;
 
 /**
  * A {@link Coder} for joda {@link Instant} that encodes it as a big endian {@link Long}
@@ -43,10 +40,14 @@ public class InstantCoder extends AtomicCoder<Instant> {
   /////////////////////////////////////////////////////////////////////////////
 
   private static final InstantCoder INSTANCE = new InstantCoder();
+  private static final TypeDescriptor<Instant> TYPE_DESCRIPTOR = new TypeDescriptor<Instant>() {};
 
   private final BigEndianLongCoder longCoder = BigEndianLongCoder.of();
 
   private InstantCoder() {}
+
+  private static final Converter<Instant, Long> ORDER_PRESERVING_CONVERTER =
+      new LexicographicLongConverter();
 
   /**
    * Converts {@link Instant} to a {@code Long} representing its millis-since-epoch,
@@ -56,19 +57,18 @@ public class InstantCoder extends AtomicCoder<Instant> {
    * <p>This deliberately utilizes the well-defined overflow for {@code Long} values.
    * See http://docs.oracle.com/javase/specs/jls/se7/html/jls-15.html#jls-15.18.2
    */
-  private static final Converter<Instant, Long> ORDER_PRESERVING_CONVERTER =
-      new Converter<Instant, Long>() {
+  private static class LexicographicLongConverter extends Converter<Instant, Long> {
 
-        @Override
-        protected Long doForward(Instant instant) {
-          return instant.getMillis() - Long.MIN_VALUE;
-        }
+    @Override
+    protected Long doForward(Instant instant) {
+      return instant.getMillis() - Long.MIN_VALUE;
+    }
 
-        @Override
-        protected Instant doBackward(Long shiftedMillis) {
-          return new Instant(shiftedMillis + Long.MIN_VALUE);
-        }
-  };
+    @Override
+    protected Instant doBackward(Long shiftedMillis) {
+      return new Instant(shiftedMillis + Long.MIN_VALUE);
+    }
+  }
 
   @Override
   public void encode(Instant value, OutputStream outStream, Context context)
@@ -111,5 +111,10 @@ public class InstantCoder extends AtomicCoder<Instant> {
       Instant value, ElementByteSizeObserver observer, Context context) throws Exception {
     longCoder.registerByteSizeObserver(
         ORDER_PRESERVING_CONVERTER.convert(value), observer, context);
+  }
+
+  @Override
+  public TypeDescriptor<Instant> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 }

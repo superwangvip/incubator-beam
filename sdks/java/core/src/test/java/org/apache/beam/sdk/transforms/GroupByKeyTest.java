@@ -19,21 +19,33 @@ package org.apache.beam.sdk.transforms;
 
 import static org.apache.beam.sdk.TestUtils.KvMatcher.isKv;
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
-
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.hasItem;
 import static org.hamcrest.Matchers.empty;
-import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.collection.IsIterableContainingInAnyOrder.containsInAnyOrder;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertThat;
 
-import org.apache.beam.sdk.Pipeline;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.google.common.base.Function;
+import com.google.common.collect.Iterables;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import org.apache.beam.sdk.coders.AtomicCoder;
 import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
+import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.MapCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.options.DirectPipelineOptions;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.runners.DirectPipelineRunner;
+import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -43,13 +55,13 @@ import org.apache.beam.sdk.transforms.windowing.InvalidWindows;
 import org.apache.beam.sdk.transforms.windowing.OutputTimeFns;
 import org.apache.beam.sdk.transforms.windowing.Sessions;
 import org.apache.beam.sdk.transforms.windowing.Window;
+import org.apache.beam.sdk.util.Reshuffle;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TimestampedValue;
 import org.apache.beam.sdk.values.TypeDescriptor;
-
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.junit.Assert;
@@ -60,16 +72,15 @@ import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-
 /**
  * Tests for GroupByKey.
  */
 @RunWith(JUnit4.class)
 @SuppressWarnings({"rawtypes", "unchecked"})
 public class GroupByKeyTest {
+
+  @Rule
+  public final TestPipeline p = TestPipeline.create();
 
   @Rule
   public ExpectedException thrown = ExpectedException.none();
@@ -85,8 +96,6 @@ public class GroupByKeyTest {
         KV.of("k1", 4),
         KV.of("k2", -33),
         KV.of("k3", 0));
-
-    Pipeline p = TestPipeline.create();
 
     PCollection<KV<String, Integer>> input =
         p.apply(Create.of(ungroupedPairs)
@@ -128,8 +137,6 @@ public class GroupByKeyTest {
         KV.of("k2", -33),  // window [5, 10)
         KV.of("k3", 0));  // window [5, 10)
 
-    Pipeline p = TestPipeline.create();
-
     PCollection<KV<String, Integer>> input =
         p.apply(Create.timestamped(ungroupedPairs, Arrays.asList(1L, 2L, 3L, 4L, 5L, 6L, 7L))
             .withCoder(KvCoder.of(StringUtf8Coder.of(), BigEndianIntegerCoder.of())));
@@ -165,8 +172,6 @@ public class GroupByKeyTest {
   public void testGroupByKeyEmpty() {
     List<KV<String, Integer>> ungroupedPairs = Arrays.asList();
 
-    Pipeline p = TestPipeline.create();
-
     PCollection<KV<String, Integer>> input =
         p.apply(Create.of(ungroupedPairs)
             .withCoder(KvCoder.of(StringUtf8Coder.of(), BigEndianIntegerCoder.of())));
@@ -184,8 +189,6 @@ public class GroupByKeyTest {
 
     List<KV<Map<String, String>, Integer>> ungroupedPairs = Arrays.asList();
 
-    Pipeline p = TestPipeline.create();
-
     PCollection<KV<Map<String, String>, Integer>> input =
         p.apply(Create.of(ungroupedPairs)
             .withCoder(
@@ -198,8 +201,8 @@ public class GroupByKeyTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testIdentityWindowFnPropagation() {
-    Pipeline p = TestPipeline.create();
 
     List<KV<String, Integer>> ungroupedPairs = Arrays.asList();
 
@@ -218,8 +221,8 @@ public class GroupByKeyTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testWindowFnInvalidation() {
-    Pipeline p = TestPipeline.create();
 
     List<KV<String, Integer>> ungroupedPairs = Arrays.asList();
 
@@ -242,15 +245,8 @@ public class GroupByKeyTest {
                     Duration.standardMinutes(1)))));
   }
 
-  private Pipeline createTestDirectRunner() {
-    DirectPipelineOptions options = PipelineOptionsFactory.as(DirectPipelineOptions.class);
-    options.setRunner(DirectPipelineRunner.class);
-    return Pipeline.create(options);
-  }
-
   @Test
   public void testInvalidWindowsDirect() {
-    Pipeline p = createTestDirectRunner();
 
     List<KV<String, Integer>> ungroupedPairs = Arrays.asList();
 
@@ -268,8 +264,8 @@ public class GroupByKeyTest {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testRemerge() {
-    Pipeline p = TestPipeline.create();
 
     List<KV<String, Integer>> ungroupedPairs = Arrays.asList();
 
@@ -294,18 +290,17 @@ public class GroupByKeyTest {
 
   @Test
   public void testGroupByKeyDirectUnbounded() {
-    Pipeline p = createTestDirectRunner();
 
     PCollection<KV<String, Integer>> input =
         p.apply(
             new PTransform<PBegin, PCollection<KV<String, Integer>>>() {
               @Override
-              public PCollection<KV<String, Integer>> apply(PBegin input) {
+              public PCollection<KV<String, Integer>> expand(PBegin input) {
                 return PCollection.<KV<String, Integer>>createPrimitiveOutputInternal(
                         input.getPipeline(),
                         WindowingStrategy.globalDefault(),
                         PCollection.IsBounded.UNBOUNDED)
-                    .setTypeDescriptorInternal(new TypeDescriptor<KV<String, Integer>>() {});
+                    .setTypeDescriptor(new TypeDescriptor<KV<String, Integer>>() {});
               }
             });
 
@@ -325,9 +320,8 @@ public class GroupByKeyTest {
   @Test
   @Category(RunnableOnService.class)
   public void testOutputTimeFnEarliest() {
-    Pipeline pipeline = TestPipeline.create();
 
-    pipeline.apply(
+    p.apply(
         Create.timestamped(
             TimestampedValue.of(KV.of(0, "hello"), new Instant(0)),
             TimestampedValue.of(KV.of(0, "goodbye"), new Instant(10))))
@@ -336,7 +330,7 @@ public class GroupByKeyTest {
         .apply(GroupByKey.<Integer, String>create())
         .apply(ParDo.of(new AssertTimestamp(new Instant(0))));
 
-    pipeline.run();
+    p.run();
   }
 
 
@@ -347,9 +341,7 @@ public class GroupByKeyTest {
   @Test
   @Category(RunnableOnService.class)
   public void testOutputTimeFnLatest() {
-    Pipeline pipeline = TestPipeline.create();
-
-    pipeline.apply(
+    p.apply(
         Create.timestamped(
             TimestampedValue.of(KV.of(0, "hello"), new Instant(0)),
             TimestampedValue.of(KV.of(0, "goodbye"), new Instant(10))))
@@ -358,7 +350,7 @@ public class GroupByKeyTest {
         .apply(GroupByKey.<Integer, String>create())
         .apply(ParDo.of(new AssertTimestamp(new Instant(10))));
 
-    pipeline.run();
+    p.run();
   }
 
   private static class AssertTimestamp<K, V> extends DoFn<KV<K, V>, Void> {
@@ -368,7 +360,7 @@ public class GroupByKeyTest {
       this.timestamp = timestamp;
     }
 
-    @Override
+    @ProcessElement
     public void processElement(ProcessContext c) throws Exception {
       assertThat(c.timestamp(), equalTo(timestamp));
     }
@@ -389,5 +381,191 @@ public class GroupByKeyTest {
 
     assertThat(gbkDisplayData.items(), empty());
     assertThat(fewKeysDisplayData, hasDisplayItem("fewKeys", true));
+  }
+
+
+  /**
+   * Verify that runners correctly hash/group on the encoded value
+   * and not the value itself.
+   */
+  @Test
+  @Category(RunnableOnService.class)
+  public void testGroupByKeyWithBadEqualsHashCode() throws Exception {
+    final int numValues = 10;
+    final int numKeys = 5;
+
+    p.getCoderRegistry().registerCoder(BadEqualityKey.class, DeterministicKeyCoder.class);
+
+    // construct input data
+    List<KV<BadEqualityKey, Long>> input = new ArrayList<>();
+    for (int i = 0; i < numValues; i++) {
+      for (int key = 0; key < numKeys; key++) {
+        input.add(KV.of(new BadEqualityKey(key), 1L));
+      }
+    }
+
+    // We first ensure that the values are randomly partitioned in the beginning.
+    // Some runners might otherwise keep all values on the machine where
+    // they are initially created.
+    PCollection<KV<BadEqualityKey, Long>> dataset1 = p
+        .apply(Create.of(input))
+        .apply(ParDo.of(new AssignRandomKey()))
+        .apply(Reshuffle.<Long, KV<BadEqualityKey, Long>>of())
+        .apply(Values.<KV<BadEqualityKey, Long>>create());
+
+    // Make the GroupByKey and Count implicit, in real-world code
+    // this would be a Count.perKey()
+    PCollection<KV<BadEqualityKey, Long>> result = dataset1
+        .apply(GroupByKey.<BadEqualityKey, Long>create())
+        .apply(Combine.<BadEqualityKey, Long>groupedValues(new CountFn()));
+
+    PAssert.that(result).satisfies(new AssertThatCountPerKeyCorrect(numValues));
+
+    PAssert.that(result.apply(Keys.<BadEqualityKey>create()))
+        .satisfies(new AssertThatAllKeysExist(numKeys));
+
+    p.run();
+  }
+
+  /**
+   * This is a bogus key class that returns random hash values from {@link #hashCode()} and always
+   * returns {@code false} for {@link #equals(Object)}. The results of the test are correct if
+   * the runner correctly hashes and sorts on the encoded bytes.
+   */
+  static class BadEqualityKey {
+    long key;
+
+    public BadEqualityKey() {}
+
+    public BadEqualityKey(long key) {
+      this.key = key;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      return false;
+    }
+
+    @Override
+    public int hashCode() {
+      return ThreadLocalRandom.current().nextInt();
+    }
+  }
+
+  /**
+   * Deterministic {@link Coder} for {@link BadEqualityKey}.
+   */
+  static class DeterministicKeyCoder extends AtomicCoder<BadEqualityKey> {
+
+    @JsonCreator
+    public static DeterministicKeyCoder of() {
+      return INSTANCE;
+    }
+
+    /////////////////////////////////////////////////////////////////////////////
+
+    private static final DeterministicKeyCoder INSTANCE =
+        new DeterministicKeyCoder();
+
+    private DeterministicKeyCoder() {}
+
+    @Override
+    public void encode(BadEqualityKey value, OutputStream outStream, Context context)
+        throws IOException {
+      new DataOutputStream(outStream).writeLong(value.key);
+    }
+
+    @Override
+    public BadEqualityKey decode(InputStream inStream, Context context)
+        throws IOException {
+      return new BadEqualityKey(new DataInputStream(inStream).readLong());
+    }
+  }
+
+  /**
+   * Creates a KV that wraps the original KV together with a random key.
+   */
+  static class AssignRandomKey
+      extends DoFn<KV<BadEqualityKey, Long>, KV<Long, KV<BadEqualityKey, Long>>> {
+
+    @ProcessElement
+    public void processElement(ProcessContext c) throws Exception {
+      c.output(KV.of(ThreadLocalRandom.current().nextLong(), c.element()));
+    }
+  }
+
+  static class CountFn implements SerializableFunction<Iterable<Long>, Long> {
+    @Override
+    public Long apply(Iterable<Long> input) {
+      long result = 0L;
+      for (Long in: input) {
+        result += in;
+      }
+      return result;
+    }
+  }
+
+  static class AssertThatCountPerKeyCorrect
+      implements SerializableFunction<Iterable<KV<BadEqualityKey, Long>>, Void> {
+    private final int numValues;
+
+    AssertThatCountPerKeyCorrect(int numValues) {
+      this.numValues = numValues;
+    }
+
+    @Override
+    public Void apply(Iterable<KV<BadEqualityKey, Long>> input) {
+      for (KV<BadEqualityKey, Long> val: input) {
+        Assert.assertEquals(numValues, (long) val.getValue());
+      }
+      return null;
+    }
+  }
+
+  static class AssertThatAllKeysExist
+      implements SerializableFunction<Iterable<BadEqualityKey>, Void> {
+    private final int numKeys;
+
+    AssertThatAllKeysExist(int numKeys) {
+      this.numKeys = numKeys;
+    }
+
+    private static <T> Iterable<Object> asStructural(
+        final Iterable<T> iterable,
+        final Coder<T> coder) {
+
+      return Iterables.transform(
+          iterable,
+          new Function<T, Object>() {
+            @Override
+            public Object apply(T input) {
+              try {
+                return coder.structuralValue(input);
+              } catch (Exception e) {
+                Assert.fail("Could not structural values.");
+                throw new RuntimeException(); // to satisfy the compiler...
+              }
+            }
+          });
+
+    }
+    @Override
+    public Void apply(Iterable<BadEqualityKey> input) {
+      final DeterministicKeyCoder keyCoder = DeterministicKeyCoder.of();
+
+      List<BadEqualityKey> expectedList = new ArrayList<>();
+      for (int key = 0; key < numKeys; key++) {
+        expectedList.add(new BadEqualityKey(key));
+      }
+
+      Iterable<Object> structuralInput = asStructural(input, keyCoder);
+      Iterable<Object> structuralExpected = asStructural(expectedList, keyCoder);
+
+      for (Object expected: structuralExpected) {
+        assertThat(structuralInput, hasItem(expected));
+      }
+
+      return null;
+    }
   }
 }

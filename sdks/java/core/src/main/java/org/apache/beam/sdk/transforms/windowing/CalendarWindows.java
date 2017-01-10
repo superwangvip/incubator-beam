@@ -19,7 +19,6 @@ package org.apache.beam.sdk.transforms.windowing;
 
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.transforms.display.DisplayData;
-
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.joda.time.Days;
@@ -150,9 +149,11 @@ public class CalendarWindows {
       super.populateDisplayData(builder);
 
       builder
-          .add(DisplayData.item("numDays", number))
+          .add(DisplayData.item("numDays", number)
+            .withLabel("Windows Days"))
           .addIfNotDefault(
-              DisplayData.item("startDate", new DateTime(startDate, timeZone).toInstant()),
+              DisplayData.item("startDate", new DateTime(startDate, timeZone).toInstant())
+                .withLabel("Window Start Date"),
               new DateTime(DEFAULT_START_DATE, DateTimeZone.UTC).toInstant());
     }
 
@@ -248,9 +249,11 @@ public class CalendarWindows {
       super.populateDisplayData(builder);
 
       builder
-          .add(DisplayData.item("numMonths", number))
+          .add(DisplayData.item("numMonths", number)
+            .withLabel("Window Months"))
           .addIfNotDefault(
-            DisplayData.item("startDate", new DateTime(startDate, timeZone).toInstant()),
+            DisplayData.item("startDate", new DateTime(startDate, timeZone).toInstant())
+              .withLabel("Window Start Date"),
             new DateTime(DEFAULT_START_DATE, DateTimeZone.UTC).toInstant());
     }
 
@@ -355,9 +358,11 @@ public class CalendarWindows {
       super.populateDisplayData(builder);
 
       builder
-          .add(DisplayData.item("numYears", number))
+          .add(DisplayData.item("numYears", number)
+            .withLabel("Window Years"))
           .addIfNotDefault(
-              DisplayData.item("startDate", new DateTime(startDate, timeZone).toInstant()),
+              DisplayData.item("startDate", new DateTime(startDate, timeZone).toInstant())
+                .withLabel("Window Start Date"),
               new DateTime(DEFAULT_START_DATE, DateTimeZone.UTC).toInstant());
     }
 

@@ -17,25 +17,29 @@
  */
 package org.apache.beam.sdk.io;
 
-import org.apache.beam.sdk.annotations.Experimental;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.transforms.display.DisplayData;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.base.Preconditions;
 import com.google.common.io.ByteStreams;
 import com.google.common.primitives.Ints;
-
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
-
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.io.Serializable;
+import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
 import java.util.NoSuchElementException;
 import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import javax.annotation.concurrent.GuardedBy;
+import org.apache.beam.sdk.annotations.Experimental;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.transforms.display.DisplayData;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 
 /**
  * A Source that reads from compressed files. A {@code CompressedSources} wraps a delegate
@@ -67,12 +71,11 @@ public class CompressedSource<T> extends FileBasedSource<T> {
   /**
    * Factory interface for creating channels that decompress the content of an underlying channel.
    */
-  public static interface DecompressingChannelFactory extends Serializable {
+  public interface DecompressingChannelFactory extends Serializable {
     /**
      * Given a channel, create a channel that decompresses the content read from the channel.
-     * @throws IOException
      */
-    public ReadableByteChannel createDecompressingChannel(ReadableByteChannel channel)
+    ReadableByteChannel createDecompressingChannel(ReadableByteChannel channel)
         throws IOException;
   }
 
@@ -80,11 +83,10 @@ public class CompressedSource<T> extends FileBasedSource<T> {
    * Factory interface for creating channels that decompress the content of an underlying channel,
    * based on both the channel and the file name.
    */
-  private static interface FileNameBasedDecompressingChannelFactory
+  private interface FileNameBasedDecompressingChannelFactory
       extends DecompressingChannelFactory {
     /**
      * Given a channel, create a channel that decompresses the content read from the channel.
-     * @throws IOException
      */
     ReadableByteChannel createDecompressingChannel(String fileName, ReadableByteChannel channel)
         throws IOException;
@@ -146,7 +148,68 @@ public class CompressedSource<T> extends FileBasedSource<T> {
         return Channels.newChannel(
             new BZip2CompressorInputStream(Channels.newInputStream(channel)));
       }
+    },
+
+    /**
+     * Reads a byte channel assuming it is compressed with zip.
+     * If the zip file contains multiple entries, files in the zip are concatenated all together.
+     */
+    ZIP {
+      @Override
+      public boolean matches(String fileName) {
+        return fileName.toLowerCase().endsWith(".zip");
+      }
+
+      public ReadableByteChannel createDecompressingChannel(ReadableByteChannel channel)
+        throws IOException {
+        FullZipInputStream zip = new FullZipInputStream(Channels.newInputStream(channel));
+        return Channels.newChannel(zip);
+      }
     };
+
+    /**
+     * Extend of {@link ZipInputStream} to automatically read all entries in the zip.
+     */
+    private static class FullZipInputStream extends InputStream {
+
+      private ZipInputStream zipInputStream;
+      private ZipEntry currentEntry;
+
+      public FullZipInputStream(InputStream is) throws IOException {
+        super();
+        zipInputStream = new ZipInputStream(is);
+        currentEntry = zipInputStream.getNextEntry();
+      }
+
+      @Override
+      public int read() throws IOException {
+        int result = zipInputStream.read();
+        while (result == -1) {
+          currentEntry = zipInputStream.getNextEntry();
+          if (currentEntry == null) {
+            return -1;
+          } else {
+            result = zipInputStream.read();
+          }
+        }
+        return result;
+      }
+
+      @Override
+      public int read(byte[] b, int off, int len) throws IOException {
+        int result = zipInputStream.read(b, off, len);
+        while (result == -1) {
+          currentEntry = zipInputStream.getNextEntry();
+          if (currentEntry == null) {
+            return -1;
+          } else {
+            result = zipInputStream.read(b, off, len);
+          }
+        }
+        return result;
+      }
+
+    }
 
     /**
      * Returns {@code true} if the given file name implies that the contents are compressed
@@ -236,7 +299,7 @@ public class CompressedSource<T> extends FileBasedSource<T> {
    */
   private CompressedSource(
       FileBasedSource<T> sourceDelegate, DecompressingChannelFactory channelFactory) {
-    super(sourceDelegate.getFileOrPatternSpec(), Long.MAX_VALUE);
+    super(sourceDelegate.getFileOrPatternSpecProvider(), Long.MAX_VALUE);
     this.sourceDelegate = sourceDelegate;
     this.channelFactory = channelFactory;
   }
@@ -249,11 +312,11 @@ public class CompressedSource<T> extends FileBasedSource<T> {
       DecompressingChannelFactory channelFactory, String filePatternOrSpec, long minBundleSize,
       long startOffset, long endOffset) {
     super(filePatternOrSpec, minBundleSize, startOffset, endOffset);
-    Preconditions.checkArgument(
-        startOffset == 0,
-        "CompressedSources must start reading at offset 0. Requested offset: " + startOffset);
     this.sourceDelegate = sourceDelegate;
     this.channelFactory = channelFactory;
+    checkArgument(
+        isSplittable() || startOffset == 0,
+        "CompressedSources must start reading at offset 0. Requested offset: " + startOffset);
   }
 
   /**
@@ -262,9 +325,9 @@ public class CompressedSource<T> extends FileBasedSource<T> {
   @Override
   public void validate() {
     super.validate();
-    Preconditions.checkNotNull(sourceDelegate);
+    checkNotNull(sourceDelegate);
     sourceDelegate.validate();
-    Preconditions.checkNotNull(channelFactory);
+    checkNotNull(channelFactory);
   }
 
   /**
@@ -274,7 +337,7 @@ public class CompressedSource<T> extends FileBasedSource<T> {
   @Override
   protected FileBasedSource<T> createForSubrangeOfFile(String fileName, long start, long end) {
     return new CompressedSource<>(sourceDelegate.createForSubrangeOfFile(fileName, start, end),
-        channelFactory, fileName, Long.MAX_VALUE, start, end);
+        channelFactory, fileName, sourceDelegate.getMinBundleSize(), start, end);
   }
 
   /**
@@ -283,13 +346,13 @@ public class CompressedSource<T> extends FileBasedSource<T> {
    * from the requested file name that the file is not compressed.
    */
   @Override
-  protected final boolean isSplittable() throws Exception {
+  protected final boolean isSplittable() {
     if (channelFactory instanceof FileNameBasedDecompressingChannelFactory) {
       FileNameBasedDecompressingChannelFactory fileNameBasedChannelFactory =
           (FileNameBasedDecompressingChannelFactory) channelFactory;
       return !fileNameBasedChannelFactory.isCompressed(getFileOrPatternSpec());
     }
-    return true;
+    return false;
   }
 
   /**
@@ -313,27 +376,22 @@ public class CompressedSource<T> extends FileBasedSource<T> {
         this, sourceDelegate.createSingleFileReader(options));
   }
 
-  /**
-   * Returns whether the delegate source produces sorted keys.
-   */
-  @Override
-  public final boolean producesSortedKeys(PipelineOptions options) throws Exception {
-    return sourceDelegate.producesSortedKeys(options);
-  }
-
   @Override
   public void populateDisplayData(DisplayData.Builder builder) {
     // We explicitly do not register base-class data, instead we use the delegate inner source.
     builder
-        .include(sourceDelegate)
-        .add(DisplayData.item("source", sourceDelegate.getClass()));
+        .include("source", sourceDelegate)
+        .add(DisplayData.item("source", sourceDelegate.getClass())
+          .withLabel("Read Source"));
 
     if (channelFactory instanceof Enum) {
       // GZIP and BZIP are implemented as enums; Enum classes are anonymous, so use the .name()
       // value instead
-      builder.add(DisplayData.item("compressionMode", ((Enum) channelFactory).name()));
+      builder.add(DisplayData.item("compressionMode", ((Enum) channelFactory).name())
+        .withLabel("Compression Mode"));
     } else {
-      builder.add(DisplayData.item("compressionMode", channelFactory.getClass()));
+      builder.add(DisplayData.item("compressionMode", channelFactory.getClass())
+        .withLabel("Compression Mode"));
     }
   }
 
@@ -358,7 +416,11 @@ public class CompressedSource<T> extends FileBasedSource<T> {
 
     private final FileBasedReader<T> readerDelegate;
     private final CompressedSource<T> source;
+    private final Object progressLock = new Object();
+    @GuardedBy("progressLock")
     private int numRecordsRead;
+    @GuardedBy("progressLock")
+    private CountingChannel channel;
 
     /**
      * Create a {@code CompressedReader} from a {@code CompressedSource} and delegate reader.
@@ -377,6 +439,23 @@ public class CompressedSource<T> extends FileBasedSource<T> {
       return readerDelegate.getCurrent();
     }
 
+    @Override
+    public boolean allowsDynamicSplitting() {
+      return false;
+    }
+
+    @Override
+    public final long getSplitPointsConsumed() {
+      synchronized (progressLock) {
+        return (isDone() && numRecordsRead > 0) ? 1 : 0;
+      }
+    }
+
+    @Override
+    public final long getSplitPointsRemaining() {
+      return isDone() ? 0 : 1;
+    }
+
     /**
      * Returns true only for the first record; compressed sources cannot be split.
      */
@@ -388,7 +467,43 @@ public class CompressedSource<T> extends FileBasedSource<T> {
       // of offsets in a file and where the range can be split in parts. CompressedReader,
       // however, is a degenerate case because it cannot be split, but it has to satisfy the
       // semantics of offsets and split points anyway.
-      return numRecordsRead == 1;
+      synchronized (progressLock) {
+        return numRecordsRead == 1;
+      }
+    }
+
+    private static class CountingChannel implements ReadableByteChannel {
+      long count;
+      private final ReadableByteChannel inner;
+
+      public CountingChannel(ReadableByteChannel inner, long count) {
+        this.inner = inner;
+        this.count = count;
+      }
+
+      public long getCount() {
+        return count;
+      }
+
+      @Override
+      public int read(ByteBuffer dst) throws IOException {
+        int bytes = inner.read(dst);
+        if (bytes > 0) {
+          // Avoid the -1 from EOF.
+          count += bytes;
+        }
+        return bytes;
+      }
+
+      @Override
+      public boolean isOpen() {
+        return inner.isOpen();
+      }
+
+      @Override
+      public void close() throws IOException {
+        inner.close();
+      }
     }
 
     /**
@@ -397,6 +512,11 @@ public class CompressedSource<T> extends FileBasedSource<T> {
      */
     @Override
     protected final void startReading(ReadableByteChannel channel) throws IOException {
+      synchronized (progressLock) {
+        this.channel = new CountingChannel(channel, getCurrentSource().getStartOffset());
+        channel = this.channel;
+      }
+
       if (source.getChannelFactory() instanceof FileNameBasedDecompressingChannelFactory) {
         FileNameBasedDecompressingChannelFactory channelFactory =
             (FileNameBasedDecompressingChannelFactory) source.getChannelFactory();
@@ -417,16 +537,28 @@ public class CompressedSource<T> extends FileBasedSource<T> {
       if (!readerDelegate.readNextRecord()) {
         return false;
       }
-      ++numRecordsRead;
+      synchronized (progressLock) {
+        ++numRecordsRead;
+      }
       return true;
     }
 
-    /**
-     * Returns the delegate reader's current offset in the decompressed input.
-     */
+    // Unsplittable: returns the offset in the input stream that has been read by the input.
+    // these positions are likely to be coarse-grained (in the event of buffering) and
+    // over-estimates (because they reflect the number of bytes read to produce an element, not its
+    // start) but both of these provide better data than e.g., reporting the start of the file.
     @Override
-    protected final long getCurrentOffset() {
-      return readerDelegate.getCurrentOffset();
+    protected final long getCurrentOffset() throws NoSuchElementException {
+      synchronized (progressLock) {
+        if (numRecordsRead <= 1) {
+          // Since the first record is at a split point, it should start at the beginning of the
+          // file. This avoids the bad case where the decompressor read the entire file, which
+          // would cause the file to be treated as empty when returning channel.getCount() as it
+          // is outside the valid range.
+          return 0;
+        }
+        return channel.getCount();
+      }
     }
   }
 }

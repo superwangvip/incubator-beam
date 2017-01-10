@@ -22,7 +22,6 @@ import static org.junit.Assert.assertEquals;
 
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-
 import org.junit.Test;
 
 /**
@@ -33,17 +32,17 @@ public class FlinkRunnerRegistrarTest {
   @Test
   public void testFullName() {
     String[] args =
-        new String[] {String.format("--runner=%s", FlinkPipelineRunner.class.getName())};
+        new String[] {String.format("--runner=%s", FlinkRunner.class.getName())};
     PipelineOptions opts = PipelineOptionsFactory.fromArgs(args).create();
-    assertEquals(opts.getRunner(), FlinkPipelineRunner.class);
+    assertEquals(opts.getRunner(), FlinkRunner.class);
   }
 
   @Test
   public void testClassName() {
     String[] args =
-        new String[] {String.format("--runner=%s", FlinkPipelineRunner.class.getSimpleName())};
+        new String[] {String.format("--runner=%s", FlinkRunner.class.getSimpleName())};
     PipelineOptions opts = PipelineOptionsFactory.fromArgs(args).create();
-    assertEquals(opts.getRunner(), FlinkPipelineRunner.class);
+    assertEquals(opts.getRunner(), FlinkRunner.class);
   }
 
 }

@@ -17,7 +17,9 @@
  */
 package org.apache.beam.runners.flink.examples.streaming;
 
-import org.apache.beam.runners.flink.FlinkPipelineRunner;
+import java.io.IOException;
+import java.util.List;
+import org.apache.beam.runners.flink.FlinkRunner;
 import org.apache.beam.runners.flink.translation.wrappers.streaming.io.UnboundedSocketSource;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.AvroCoder;
@@ -40,26 +42,20 @@ import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.Sum;
 import org.apache.beam.sdk.transforms.Top;
 import org.apache.beam.sdk.transforms.windowing.AfterWatermark;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
-
 import org.joda.time.Duration;
-
-import java.io.IOException;
-import java.util.List;
 
 /**
  * To run the example, first open a socket on a terminal by executing the command:
- * <li>
- *     <li>
- *     <code>nc -lk 9999</code>
- *     </li>
- * </li>
+ * <ul>
+ *   <li><code>nc -lk 9999</code>
+ * </ul>
  * and then launch the example. Now whatever you type in the terminal is going to be
  * the input to the program.
  * */
@@ -86,19 +82,20 @@ public class AutoComplete {
     }
 
     @Override
-    public PCollection<KV<String, List<CompletionCandidate>>> apply(PCollection<String> input) {
+    public PCollection<KV<String, List<CompletionCandidate>>> expand(PCollection<String> input) {
       PCollection<CompletionCandidate> candidates = input
         // First count how often each token appears.
         .apply(new Count.PerElement<String>())
 
         // Map the KV outputs of Count into our own CompletionCandiate class.
-        .apply(ParDo.named("CreateCompletionCandidates").of(
+        .apply("CreateCompletionCandidates", ParDo.of(
             new DoFn<KV<String, Long>, CompletionCandidate>() {
               private static final long serialVersionUID = 0;
 
-              @Override
+              @ProcessElement
               public void processElement(ProcessContext c) {
-                CompletionCandidate cand = new CompletionCandidate(c.element().getKey(), c.element().getValue());
+                CompletionCandidate cand = new CompletionCandidate(c.element().getKey(),
+                    c.element().getValue());
                 c.output(cand);
               }
             }));
@@ -132,7 +129,7 @@ public class AutoComplete {
     }
 
     @Override
-    public PCollection<KV<String, List<CompletionCandidate>>> apply(
+    public PCollection<KV<String, List<CompletionCandidate>>> expand(
         PCollection<CompletionCandidate> input) {
       return input
         // For each completion candidate, map it to all prefixes.
@@ -156,7 +153,7 @@ public class AutoComplete {
   /**
    * Cheaper but higher latency.
    *
-   * <p> Returns two PCollections, the first is top prefixes of size greater
+   * <p>Returns two PCollections, the first is top prefixes of size greater
    * than minPrefix, and the second is top prefixes of size exactly
    * minPrefix.
    */
@@ -186,7 +183,7 @@ public class AutoComplete {
         extends DoFn<KV<String, List<CompletionCandidate>>, CompletionCandidate> {
       private static final long serialVersionUID = 0;
 
-      @Override
+      @ProcessElement
       public void processElement(ProcessContext c) {
         for (CompletionCandidate cc : c.element().getValue()) {
           c.output(cc);
@@ -195,7 +192,7 @@ public class AutoComplete {
     }
 
     @Override
-    public PCollectionList<KV<String, List<CompletionCandidate>>> apply(
+    public PCollectionList<KV<String, List<CompletionCandidate>>> expand(
           PCollection<CompletionCandidate> input) {
         if (minPrefix > 10) {
           // Base case, partitioning to return the output in the expected format.
@@ -215,13 +212,13 @@ public class AutoComplete {
             // ...together with those (previously excluded) candidates of length
             // exactly minPrefix...
             .and(input.apply(Filter.by(new SerializableFunction<CompletionCandidate, Boolean>() {
-                    private static final long serialVersionUID = 0;
+              private static final long serialVersionUID = 0;
 
-                    @Override
-                    public Boolean apply(CompletionCandidate c) {
-                      return c.getValue().length() == minPrefix;
-                    }
-                  })))
+              @Override
+              public Boolean apply(CompletionCandidate c) {
+                return c.getValue().length() == minPrefix;
+              }
+            })))
             .apply("FlattenSmall", Flatten.<CompletionCandidate>pCollections())
             // ...set the key to be the minPrefix-length prefix...
             .apply(ParDo.of(new AllPrefixes(minPrefix, minPrefix)))
@@ -252,7 +249,7 @@ public class AutoComplete {
       this.minPrefix = minPrefix;
       this.maxPrefix = maxPrefix;
     }
-    @Override
+    @ProcessElement
       public void processElement(ProcessContext c) {
       String word = c.element().value;
       for (int i = minPrefix; i <= Math.min(word.length(), maxPrefix); i++) {
@@ -317,9 +314,9 @@ public class AutoComplete {
 
   static class ExtractWordsFn extends DoFn<String, String> {
     private final Aggregator<Long, Long> emptyLines =
-            createAggregator("emptyLines", new Sum.SumLongFn());
+            createAggregator("emptyLines", Sum.ofLongs());
 
-    @Override
+    @ProcessElement
     public void processElement(ProcessContext c) {
       if (c.element().trim().isEmpty()) {
         emptyLines.addValue(1L);
@@ -338,21 +335,21 @@ public class AutoComplete {
   }
 
   /**
-   * Takes as input a the top candidates per prefix, and emits an entity
-   * suitable for writing to Datastore.
+   * Takes as input a the top candidates per prefix, and emits an entity suitable for writing to
+   * Datastore.
    */
-  static class FormatForPerTaskLocalFile extends DoFn<KV<String, List<CompletionCandidate>>, String>
-          implements DoFn.RequiresWindowAccess{
+  static class FormatForPerTaskLocalFile
+      extends DoFn<KV<String, List<CompletionCandidate>>, String> {
 
     private static final long serialVersionUID = 0;
 
-    @Override
-    public void processElement(ProcessContext c) {
+    @ProcessElement
+    public void processElement(ProcessContext c, BoundedWindow window) {
       StringBuilder str = new StringBuilder();
       KV<String, List<CompletionCandidate>> elem = c.element();
 
-      str.append(elem.getKey() +" @ "+ c.window() +" -> ");
-      for(CompletionCandidate cand: elem.getValue()) {
+      str.append(elem.getKey() + " @ " + window + " -> ");
+      for (CompletionCandidate cand: elem.getValue()) {
         str.append(cand.toString() + " ");
       }
       System.out.println(str.toString());
@@ -363,7 +360,7 @@ public class AutoComplete {
   /**
    * Options supported by this class.
    *
-   * <p> Inherits standard Dataflow configuration options.
+   * <p>Inherits standard Dataflow configuration options.
    */
   private interface Options extends WindowedWordCount.StreamingWordCountOptions {
     @Description("Whether to use the recursive algorithm")
@@ -378,16 +375,16 @@ public class AutoComplete {
     options.setCheckpointingInterval(1000L);
     options.setNumberOfExecutionRetries(5);
     options.setExecutionRetryDelay(3000L);
-    options.setRunner(FlinkPipelineRunner.class);
+    options.setRunner(FlinkRunner.class);
 
-    PTransform<? super PBegin, PCollection<String>> readSource =
-            Read.from(new UnboundedSocketSource<>("localhost", 9999, '\n', 3)).named("WordStream");
-    WindowFn<Object, ?> windowFn = FixedWindows.of(Duration.standardSeconds(options.getWindowSize()));
+
+    WindowFn<Object, ?> windowFn =
+        FixedWindows.of(Duration.standardSeconds(options.getWindowSize()));
 
     // Create the pipeline.
     Pipeline p = Pipeline.create(options);
     PCollection<KV<String, List<CompletionCandidate>>> toWrite = p
-      .apply(readSource)
+      .apply("WordStream", Read.from(new UnboundedSocketSource<>("localhost", 9999, '\n', 3)))
       .apply(ParDo.of(new ExtractWordsFn()))
       .apply(Window.<String>into(windowFn)
               .triggering(AfterWatermark.pastEndOfWindow()).withAllowedLateness(Duration.ZERO)
@@ -395,7 +392,7 @@ public class AutoComplete {
       .apply(ComputeTopCompletions.top(10, options.getRecursive()));
 
     toWrite
-      .apply(ParDo.named("FormatForPerTaskFile").of(new FormatForPerTaskLocalFile()))
+      .apply("FormatForPerTaskFile", ParDo.of(new FormatForPerTaskLocalFile()))
       .apply(TextIO.Write.to("./outputAutoComplete.txt"));
 
     p.run();

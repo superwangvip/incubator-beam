@@ -17,10 +17,12 @@
  */
 package org.apache.beam.examples.complete.game;
 
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.List;
 import org.apache.beam.examples.complete.game.UserScore.ExtractAndSumScore;
 import org.apache.beam.examples.complete.game.UserScore.GameActionInfo;
 import org.apache.beam.examples.complete.game.UserScore.ParseEventFn;
-import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
@@ -31,17 +33,13 @@ import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.TypeDescriptor;
-
+import org.apache.beam.sdk.values.TypeDescriptors;
 import org.junit.Assert;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.Serializable;
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Tests of UserScore.
@@ -83,13 +81,16 @@ public class UserScoreTest implements Serializable {
       KV.of("AndroidGreenKookaburra", 23),
       KV.of("BisqueBilby", 14));
 
-  /** Test the ParseEventFn DoFn. */
+  @Rule
+  public TestPipeline p = TestPipeline.create();
+
+  /** Test the {@link ParseEventFn} {@link org.apache.beam.sdk.transforms.DoFn}. */
   @Test
-  public void testParseEventFn() {
+  public void testParseEventFn() throws Exception {
     DoFnTester<String, GameActionInfo> parseEventFn =
         DoFnTester.of(new ParseEventFn());
 
-    List<GameActionInfo> results = parseEventFn.processBatch(GAME_EVENTS_ARRAY);
+    List<GameActionInfo> results = parseEventFn.processBundle(GAME_EVENTS_ARRAY);
     Assert.assertEquals(results.size(), 8);
     Assert.assertEquals(results.get(0).getUser(), "user0_MagentaKangaroo");
     Assert.assertEquals(results.get(0).getTeam(), "MagentaKangaroo");
@@ -100,7 +101,6 @@ public class UserScoreTest implements Serializable {
   @Test
   @Category(RunnableOnService.class)
   public void testUserScoreSums() throws Exception {
-    Pipeline p = TestPipeline.create();
 
     PCollection<String> input = p.apply(Create.of(GAME_EVENTS).withCoder(StringUtf8Coder.of()));
 
@@ -112,14 +112,13 @@ public class UserScoreTest implements Serializable {
     // Check the user score sums.
     PAssert.that(output).containsInAnyOrder(USER_SUMS);
 
-    p.run();
+    p.run().waitUntilFinish();
   }
 
   /** Tests ExtractAndSumScore("team"). */
   @Test
   @Category(RunnableOnService.class)
   public void testTeamScoreSums() throws Exception {
-    Pipeline p = TestPipeline.create();
 
     PCollection<String> input = p.apply(Create.of(GAME_EVENTS).withCoder(StringUtf8Coder.of()));
 
@@ -131,14 +130,13 @@ public class UserScoreTest implements Serializable {
     // Check the team score sums.
     PAssert.that(output).containsInAnyOrder(TEAM_SUMS);
 
-    p.run();
+    p.run().waitUntilFinish();
   }
 
   /** Test that bad input data is dropped appropriately. */
   @Test
   @Category(RunnableOnService.class)
   public void testUserScoresBadInput() throws Exception {
-    Pipeline p = TestPipeline.create();
 
     PCollection<String> input = p.apply(Create.of(GAME_EVENTS2).withCoder(StringUtf8Coder.of()));
 
@@ -146,10 +144,11 @@ public class UserScoreTest implements Serializable {
       .apply(ParDo.of(new ParseEventFn()))
       .apply(
           MapElements.via((GameActionInfo gInfo) -> KV.of(gInfo.getUser(), gInfo.getScore()))
-          .withOutputType(new TypeDescriptor<KV<String, Integer>>() {}));
+          .withOutputType(
+              TypeDescriptors.kvs(TypeDescriptors.strings(), TypeDescriptors.integers())));
 
     PAssert.that(extract).empty();
 
-    p.run();
+    p.run().waitUntilFinish();
   }
 }

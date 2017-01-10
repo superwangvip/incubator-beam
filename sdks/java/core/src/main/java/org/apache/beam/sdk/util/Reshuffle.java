@@ -50,7 +50,7 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
   }
 
   @Override
-  public PCollection<KV<K, V>> apply(PCollection<KV<K, V>> input) {
+  public PCollection<KV<K, V>> expand(PCollection<KV<K, V>> input) {
     WindowingStrategy<?, ?> originalStrategy = input.getWindowingStrategy();
     // If the input has already had its windows merged, then the GBK that performed the merge
     // will have set originalStrategy.getWindowFn() to InvalidWindows, causing the GBK contained
@@ -58,8 +58,7 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
     Window.Bound<KV<K, V>> rewindow =
         Window.<KV<K, V>>into(
                 new IdentityWindowFn<>(
-                    originalStrategy.getWindowFn().windowCoder(),
-                    originalStrategy.getWindowFn().assignsToSingleWindow()))
+                    originalStrategy.getWindowFn().windowCoder()))
             .triggering(new ReshuffleTrigger<>())
             .discardingFiredPanes()
             .withAllowedLateness(Duration.millis(BoundedWindow.TIMESTAMP_MAX_VALUE.getMillis()));
@@ -69,9 +68,9 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
         // Set the windowing strategy directly, so that it doesn't get counted as the user having
         // set allowed lateness.
         .setWindowingStrategyInternal(originalStrategy)
-        .apply(ParDo.named("ExpandIterable").of(
+        .apply("ExpandIterable", ParDo.of(
             new DoFn<KV<K, Iterable<V>>, KV<K, V>>() {
-              @Override
+              @ProcessElement
               public void processElement(ProcessContext c) {
                 K key = c.element().getKey();
                 for (V value : c.element().getValue()) {

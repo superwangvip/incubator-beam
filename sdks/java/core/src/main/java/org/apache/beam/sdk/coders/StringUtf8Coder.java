@@ -17,16 +17,10 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.util.ExposedByteArrayOutputStream;
-import org.apache.beam.sdk.util.StreamUtils;
-import org.apache.beam.sdk.util.VarInt;
-
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.google.common.base.Utf8;
 import com.google.common.io.ByteStreams;
 import com.google.common.io.CountingOutputStream;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
-
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
@@ -35,6 +29,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UTFDataFormatException;
 import java.nio.charset.StandardCharsets;
+import org.apache.beam.sdk.util.ExposedByteArrayOutputStream;
+import org.apache.beam.sdk.util.StreamUtils;
+import org.apache.beam.sdk.util.VarInt;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link Coder} that encodes {@link String Strings} in UTF-8 encoding.
@@ -51,6 +49,7 @@ public class StringUtf8Coder extends AtomicCoder<String> {
   /////////////////////////////////////////////////////////////////////////////
 
   private static final StringUtf8Coder INSTANCE = new StringUtf8Coder();
+  private static final TypeDescriptor<String> TYPE_DESCRIPTOR = new TypeDescriptor<String>() {};
 
   private static void writeString(String value, DataOutputStream dos)
       throws IOException {
@@ -114,6 +113,11 @@ public class StringUtf8Coder extends AtomicCoder<String> {
   @Override
   public boolean consistentWithEquals() {
     return true;
+  }
+
+  @Override
+  public TypeDescriptor<String> getEncodedTypeDescriptor() {
+    return TYPE_DESCRIPTOR;
   }
 
   /**

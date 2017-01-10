@@ -17,25 +17,11 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.CoderException;
-import org.apache.beam.sdk.coders.CoderRegistry;
-import org.apache.beam.sdk.coders.CustomCoder;
-import org.apache.beam.sdk.coders.ListCoder;
-import org.apache.beam.sdk.transforms.Combine.AccumulatingCombineFn;
-import org.apache.beam.sdk.transforms.Combine.AccumulatingCombineFn.Accumulator;
-import org.apache.beam.sdk.transforms.display.DisplayData;
-import org.apache.beam.sdk.util.WeightedValue;
-import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
+import static com.google.common.base.Preconditions.checkArgument;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import com.google.common.collect.UnmodifiableIterator;
-
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -49,8 +35,20 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.PriorityQueue;
-
 import javax.annotation.Nullable;
+import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.CoderException;
+import org.apache.beam.sdk.coders.CoderRegistry;
+import org.apache.beam.sdk.coders.CustomCoder;
+import org.apache.beam.sdk.coders.ListCoder;
+import org.apache.beam.sdk.transforms.Combine.AccumulatingCombineFn;
+import org.apache.beam.sdk.transforms.Combine.AccumulatingCombineFn.Accumulator;
+import org.apache.beam.sdk.transforms.display.DisplayData;
+import org.apache.beam.sdk.util.WeightedValue;
+import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
+import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollection;
 
 /**
  * {@code PTransform}s for getting an idea of a {@code PCollection}'s
@@ -209,8 +207,9 @@ public class ApproximateQuantiles {
    * </pre>
    *
    * <p>The default error bound is {@code 1 / N}, though in practice
-   * the accuracy tends to be much better.  <p>See
-   * {@link #create(int, Comparator, long, double)} for
+   * the accuracy tends to be much better.
+   *
+   * <p>See {@link #create(int, Comparator, long, double)} for
    * more information about the meaning of {@code epsilon}, and
    * {@link #withEpsilon} for a convenient way to adjust it.
    *
@@ -254,9 +253,9 @@ public class ApproximateQuantiles {
         int bufferSize,
         int numBuffers,
         long maxNumElements) {
-      Preconditions.checkArgument(numQuantiles >= 2);
-      Preconditions.checkArgument(bufferSize >= 2);
-      Preconditions.checkArgument(numBuffers >= 2);
+      checkArgument(numQuantiles >= 2);
+      checkArgument(bufferSize >= 2);
+      checkArgument(numBuffers >= 2);
       this.numQuantiles = numQuantiles;
       this.compareFn = compareFn;
       this.bufferSize = bufferSize;
@@ -365,8 +364,10 @@ public class ApproximateQuantiles {
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
       builder
-          .add(DisplayData.item("numQuantiles", numQuantiles))
-          .add(DisplayData.item("comparer", compareFn.getClass()));
+          .add(DisplayData.item("numQuantiles", numQuantiles)
+            .withLabel("Quantile Count"))
+          .add(DisplayData.item("comparer", compareFn.getClass())
+            .withLabel("Record Comparer"));
     }
   }
 

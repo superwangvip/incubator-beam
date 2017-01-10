@@ -17,33 +17,32 @@
  */
 package org.apache.beam.sdk.extensions.joinlibrary;
 
-import org.apache.beam.sdk.Pipeline;
+import java.util.ArrayList;
+import java.util.List;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * This test Inner Join functionality.
  */
 public class InnerJoinTest {
 
-  Pipeline p;
   List<KV<String, Long>> leftListOfKv;
   List<KV<String, String>> listRightOfKv;
   List<KV<String, KV<Long, String>>> expectedResult;
 
+  @Rule
+  public final transient TestPipeline p = TestPipeline.create();
+
   @Before
   public void setup() {
 
-    p = TestPipeline.create();
     leftListOfKv = new ArrayList<>();
     listRightOfKv = new ArrayList<>();
 
@@ -133,11 +132,13 @@ public class InnerJoinTest {
 
   @Test(expected = NullPointerException.class)
   public void testJoinLeftCollectionNull() {
+    p.enableAbandonedNodeEnforcement(false);
     Join.innerJoin(null, p.apply(Create.of(listRightOfKv)));
   }
 
   @Test(expected = NullPointerException.class)
   public void testJoinRightCollectionNull() {
+    p.enableAbandonedNodeEnforcement(false);
     Join.innerJoin(p.apply(Create.of(leftListOfKv)), null);
   }
 }

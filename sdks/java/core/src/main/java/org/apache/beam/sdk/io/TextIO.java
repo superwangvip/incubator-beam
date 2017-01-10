@@ -17,25 +17,12 @@
  */
 package org.apache.beam.sdk.io;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.Coder.Context;
-import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.coders.VoidCoder;
-import org.apache.beam.sdk.io.Read.Bounded;
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.runners.DirectPipelineRunner;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.display.DisplayData;
-import org.apache.beam.sdk.util.IOChannelUtils;
-import org.apache.beam.sdk.util.MimeTypes;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PDone;
-import org.apache.beam.sdk.values.PInput;
-
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.protobuf.ByteString;
 
 import java.io.IOException;
@@ -51,6 +38,23 @@ import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
 
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.Coder.Context;
+import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.coders.VoidCoder;
+import org.apache.beam.sdk.io.FileBasedSink.WritableByteChannelFactory;
+import org.apache.beam.sdk.io.Read.Bounded;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.options.ValueProvider;
+import org.apache.beam.sdk.options.ValueProvider.StaticValueProvider;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.display.DisplayData;
+import org.apache.beam.sdk.util.IOChannelUtils;
+import org.apache.beam.sdk.util.MimeTypes;
+import org.apache.beam.sdk.values.PBegin;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PDone;
+
 /**
  * {@link PTransform}s for reading and writing text files.
  *
@@ -59,8 +63,7 @@ import javax.annotation.Nullable;
  * the path of the file(s) to read from (e.g., a local filename or
  * filename pattern if running locally, or a Google Cloud Storage
  * filename or filename pattern of the form
- * {@code "gs://<bucket>/<filepath>"}). You may optionally call
- * {@link TextIO.Read#named(String)} to specify the name of the pipeline step.
+ * {@code "gs://<bucket>/<filepath>"}).
  *
  * <p>By default, {@link TextIO.Read} returns a {@link PCollection} of {@link String Strings},
  * each corresponding to one line of an input UTF-8 text file. To convert directly from the raw
@@ -76,12 +79,11 @@ import javax.annotation.Nullable;
  * PCollection<String> lines =
  *     p.apply(TextIO.Read.from("/local/path/to/file.txt"));
  *
- * // A fully-specified Read from a GCS file (runs locally and via the
- * // Google Cloud Dataflow service):
+ * // A fully-specified Read from a GCS file:
  * PCollection<Integer> numbers =
- *     p.apply(TextIO.Read.named("ReadNumbers")
- *                        .from("gs://my_bucket/path/to/numbers-*.txt")
- *                        .withCoder(TextualIntegerCoder.of()));
+ *     p.apply("ReadNumbers", TextIO.Read
+ *         .from("gs://my_bucket/path/to/numbers-*.txt")
+ *         .withCoder(TextualIntegerCoder.of()));
  * }</pre>
  *
  * <p>To write a {@link PCollection} to one or more text files, use
@@ -89,9 +91,8 @@ import javax.annotation.Nullable;
  * the path of the file to write to (e.g., a local filename or sharded
  * filename pattern if running locally, or a Google Cloud Storage
  * filename or sharded filename pattern of the form
- * {@code "gs://<bucket>/<filepath>"}). You can optionally name the resulting transform using
- * {@link TextIO.Write#named(String)}, and you can use {@link TextIO.Write#withCoder(Coder)}
- * to specify the Coder to use to encode the Java values into text lines.
+ * {@code "gs://<bucket>/<filepath>"}). You can use {@link TextIO.Write#withCoder(Coder)}
+ * to specify the {@link Coder} to use to encode the Java values into text lines.
  *
  * <p>Any existing files with the same names as generated output files
  * will be overwritten.
@@ -102,22 +103,21 @@ import javax.annotation.Nullable;
  * PCollection<String> lines = ...;
  * lines.apply(TextIO.Write.to("/path/to/file.txt"));
  *
- * // A fully-specified Write to a sharded GCS file (runs locally and via the
- * // Google Cloud Dataflow service):
+ * // A fully-specified Write to a sharded GCS file:
  * PCollection<Integer> numbers = ...;
- * numbers.apply(TextIO.Write.named("WriteNumbers")
- *                           .to("gs://my_bucket/path/to/numbers")
- *                           .withSuffix(".txt")
- *                           .withCoder(TextualIntegerCoder.of()));
- * }</pre>
+ * numbers.apply("WriteNumbers", TextIO.Write
+ *      .to("gs://my_bucket/path/to/numbers")
+ *      .withSuffix(".txt")
+ *      .withCoder(TextualIntegerCoder.of()));
  *
- * <h3>Permissions</h3>
- * <p>When run using the {@link DirectPipelineRunner}, your pipeline can read and write text files
- * on your local drive and remote text files on Google Cloud Storage that you have access to using
- * your {@code gcloud} credentials. When running in the Dataflow service, the pipeline can only
- * read and write files from GCS. For more information about permissions, see the Cloud Dataflow
- * documentation on <a href="https://cloud.google.com/dataflow/security-and-permissions">Security
- * and Permissions</a>.
+ * // Same as above, only with Gzip compression:
+ * PCollection<Integer> numbers = ...;
+ * numbers.apply("WriteNumbers", TextIO.Write
+ *      .to("gs://my_bucket/path/to/numbers")
+ *      .withSuffix(".txt")
+ *      .withCoder(TextualIntegerCoder.of())
+ *      .withWritableByteChannelFactory(FileBasedSink.CompressionType.GZIP));
+ * }</pre>
  */
 public class TextIO {
   /** The default coder, which returns each line of the input file as a string. */
@@ -131,12 +131,6 @@ public class TextIO {
    * {@link #withCoder(Coder)} to change the return type.
    */
   public static class Read {
-    /**
-     * Returns a transform for reading text files that uses the given step name.
-     */
-    public static Bound<String> named(String name) {
-      return new Bound<>(DEFAULT_TEXT_CODER).named(name);
-    }
 
     /**
      * Returns a transform for reading text files that reads from the file(s)
@@ -147,6 +141,13 @@ public class TextIO {
      * >Java Filesystem glob patterns</a> ("*", "?", "[..]") are supported.
      */
     public static Bound<String> from(String filepattern) {
+      return new Bound<>(DEFAULT_TEXT_CODER).from(filepattern);
+    }
+
+    /**
+     * Same as {@code from(filepattern)}, but accepting a {@link ValueProvider}.
+     */
+    public static Bound<String> from(ValueProvider<String> filepattern) {
       return new Bound<>(DEFAULT_TEXT_CODER).from(filepattern);
     }
 
@@ -201,9 +202,9 @@ public class TextIO {
      * may use {@link #withCoder(Coder)} to supply a {@code Coder<T>} to produce a
      * {@code PCollection<T>} instead.
      */
-    public static class Bound<T> extends PTransform<PInput, PCollection<T>> {
+    public static class Bound<T> extends PTransform<PBegin, PCollection<T>> {
       /** The filepattern to read from. */
-      @Nullable private final String filepattern;
+      @Nullable private final ValueProvider<String> filepattern;
 
       /** The Coder to use to decode each line. */
       private final Coder<T> coder;
@@ -218,23 +219,13 @@ public class TextIO {
         this(null, null, coder, true, TextIO.CompressionType.AUTO);
       }
 
-      private Bound(String name, String filepattern, Coder<T> coder, boolean validate,
-          TextIO.CompressionType compressionType) {
+      private Bound(@Nullable String name, @Nullable ValueProvider<String> filepattern,
+          Coder<T> coder, boolean validate, TextIO.CompressionType compressionType) {
         super(name);
         this.coder = coder;
         this.filepattern = filepattern;
         this.validate = validate;
         this.compressionType = compressionType;
-      }
-
-      /**
-       * Returns a new transform for reading from text files that's like this one but
-       * with the given step name.
-       *
-       * <p>Does not modify this object.
-       */
-      public Bound<T> named(String name) {
-        return new Bound<>(name, filepattern, coder, validate, compressionType);
       }
 
       /**
@@ -246,12 +237,22 @@ public class TextIO {
 
        */
       public Bound<T> from(String filepattern) {
+        checkNotNull(filepattern, "Filepattern cannot be empty.");
+        return new Bound<>(name, StaticValueProvider.of(filepattern), coder, validate,
+                           compressionType);
+      }
+
+      /**
+       * Same as {@code from(filepattern)}, but accepting a {@link ValueProvider}.
+       */
+      public Bound<T> from(ValueProvider<String> filepattern) {
+        checkNotNull(filepattern, "Filepattern cannot be empty.");
         return new Bound<>(name, filepattern, coder, validate, compressionType);
       }
 
       /**
        * Returns a new transform for reading from text files that's like this one but
-       * that uses the given {@link Coder Coder<X>} to decode each of the
+       * that uses the given {@link Coder Coder&lt;X&gt;} to decode each of the
        * lines of the file into a value of type {@code X}.
        *
        * <p>Does not modify this object.
@@ -291,62 +292,68 @@ public class TextIO {
       }
 
       @Override
-      public PCollection<T> apply(PInput input) {
+      public PCollection<T> expand(PBegin input) {
         if (filepattern == null) {
           throw new IllegalStateException("need to set the filepattern of a TextIO.Read transform");
         }
 
         if (validate) {
+          checkState(filepattern.isAccessible(), "Cannot validate with a RVP.");
           try {
             checkState(
-                !IOChannelUtils.getFactory(filepattern).match(filepattern).isEmpty(),
+              !IOChannelUtils.getFactory(filepattern.get()).match(filepattern.get()).isEmpty(),
                 "Unable to find any files matching %s",
                 filepattern);
           } catch (IOException e) {
             throw new IllegalStateException(
-                String.format("Failed to validate %s", filepattern), e);
+              String.format("Failed to validate %s", filepattern.get()), e);
           }
         }
 
-        // Create a source specific to the requested compression type.
-        final Bounded<T> read;
-        switch(compressionType) {
-          case UNCOMPRESSED:
-            read = org.apache.beam.sdk.io.Read.from(
-                new TextSource<T>(filepattern, coder));
-            break;
-          case AUTO:
-            read = org.apache.beam.sdk.io.Read.from(
-                CompressedSource.from(new TextSource<T>(filepattern, coder)));
-            break;
-          case BZIP2:
-            read = org.apache.beam.sdk.io.Read.from(
-                CompressedSource.from(new TextSource<T>(filepattern, coder))
-                                .withDecompression(CompressedSource.CompressionMode.BZIP2));
-            break;
-          case GZIP:
-            read = org.apache.beam.sdk.io.Read.from(
-                CompressedSource.from(new TextSource<T>(filepattern, coder))
-                                .withDecompression(CompressedSource.CompressionMode.GZIP));
-            break;
-          default:
-            throw new IllegalArgumentException("Unknown compression mode: " + compressionType);
-        }
-
+        final Bounded<T> read = org.apache.beam.sdk.io.Read.from(getSource());
         PCollection<T> pcol = input.getPipeline().apply("Read", read);
         // Honor the default output coder that would have been used by this PTransform.
         pcol.setCoder(getDefaultOutputCoder());
         return pcol;
       }
 
+      // Helper to create a source specific to the requested compression type.
+      protected FileBasedSource<T> getSource() {
+        switch (compressionType) {
+          case UNCOMPRESSED:
+            return new TextSource<T>(filepattern, coder);
+          case AUTO:
+            return CompressedSource.from(new TextSource<T>(filepattern, coder));
+          case BZIP2:
+            return
+                CompressedSource.from(new TextSource<T>(filepattern, coder))
+                    .withDecompression(CompressedSource.CompressionMode.BZIP2);
+          case GZIP:
+            return
+                CompressedSource.from(new TextSource<T>(filepattern, coder))
+                    .withDecompression(CompressedSource.CompressionMode.GZIP);
+          case ZIP:
+            return
+                CompressedSource.from(new TextSource<T>(filepattern, coder))
+                    .withDecompression(CompressedSource.CompressionMode.ZIP);
+          default:
+            throw new IllegalArgumentException("Unknown compression type: " + compressionType);
+        }
+      }
+
       @Override
       public void populateDisplayData(DisplayData.Builder builder) {
         super.populateDisplayData(builder);
 
+        String filepatternDisplay = filepattern.isAccessible()
+          ? filepattern.get() : filepattern.toString();
         builder
-            .add(DisplayData.item("compressionType", compressionType.toString()))
-            .addIfNotDefault(DisplayData.item("validation", validate), true)
-            .addIfNotNull(DisplayData.item("filePattern", filepattern));
+            .add(DisplayData.item("compressionType", compressionType.toString())
+              .withLabel("Compression Type"))
+            .addIfNotDefault(DisplayData.item("validation", validate)
+              .withLabel("Validation Enabled"), true)
+            .addIfNotNull(DisplayData.item("filePattern", filepatternDisplay)
+              .withLabel("File Pattern"));
       }
 
       @Override
@@ -355,7 +362,7 @@ public class TextIO {
       }
 
       public String getFilepattern() {
-        return filepattern;
+        return filepattern.get();
       }
 
       public boolean needsValidation() {
@@ -380,12 +387,6 @@ public class TextIO {
    * element of the input collection encoded into its own line.
    */
   public static class Write {
-    /**
-     * Returns a transform for writing to text files with the given step name.
-     */
-    public static Bound<String> named(String name) {
-      return new Bound<>(DEFAULT_TEXT_CODER).named(name);
-    }
 
     /**
      * Returns a transform for writing to text files that writes to the file(s)
@@ -399,6 +400,13 @@ public class TextIO {
      * in a common extension, if given by {@link Bound#withSuffix(String)}.
      */
     public static Bound<String> to(String prefix) {
+      return new Bound<>(DEFAULT_TEXT_CODER).to(prefix);
+    }
+
+    /**
+     * Like {@link #to(String)}, but with a {@link ValueProvider}.
+     */
+    public static Bound<String> to(ValueProvider<String> prefix) {
       return new Bound<>(DEFAULT_TEXT_CODER).to(prefix);
     }
 
@@ -468,7 +476,46 @@ public class TextIO {
       return new Bound<>(DEFAULT_TEXT_CODER).withoutValidation();
     }
 
-    // TODO: appendingNewlines, header, footer, etc.
+    /**
+     * Returns a transform for writing to text files that adds a header string to the files
+     * it writes. Note that a newline character will be added after the header.
+     *
+     * <p>A {@code null} value will clear any previously configured header.
+     *
+     * @param header the string to be added as file header
+     */
+    public static Bound<String> withHeader(@Nullable String header) {
+      return new Bound<>(DEFAULT_TEXT_CODER).withHeader(header);
+    }
+
+    /**
+     * Returns a transform for writing to text files that adds a footer string to the files
+     * it writes. Note that a newline character will be added after the header.
+     *
+     * <p>A {@code null} value will clear any previously configured footer.
+     *
+     * @param footer the string to be added as file footer
+     */
+    public static Bound<String> withFooter(@Nullable String footer) {
+      return new Bound<>(DEFAULT_TEXT_CODER).withFooter(footer);
+    }
+
+    /**
+     * Returns a transform for writing to text files like this one but that has the given
+     * {@link WritableByteChannelFactory} to be used by the {@link FileBasedSink} during output. The
+     * default is value is {@link FileBasedSink.CompressionType#UNCOMPRESSED}.
+     *
+     * <p>A {@code null} value will reset the value to the default value mentioned above.
+     *
+     * @param writableByteChannelFactory the factory to be used during output
+     */
+    public static Bound<String> withWritableByteChannelFactory(
+        WritableByteChannelFactory writableByteChannelFactory) {
+      return new Bound<>(DEFAULT_TEXT_CODER)
+          .withWritableByteChannelFactory(writableByteChannelFactory);
+    }
+
+    // TODO: appendingNewlines, etc.
 
     /**
      * A PTransform that writes a bounded PCollection to a text file (or
@@ -481,9 +528,15 @@ public class TextIO {
       private static final String DEFAULT_SHARD_TEMPLATE = ShardNameTemplate.INDEX_OF_MAX;
 
       /** The prefix of each file written, combined with suffix and shardTemplate. */
-      @Nullable private final String filenamePrefix;
+      private final ValueProvider<String> filenamePrefix;
       /** The suffix of each file written, combined with prefix and shardTemplate. */
       private final String filenameSuffix;
+
+      /** An optional header to add to each file. */
+      @Nullable private final String header;
+
+      /** An optional footer to add to each file. */
+      @Nullable private final String footer;
 
       /** The Coder to use to decode each line. */
       private final Coder<T> coder;
@@ -497,30 +550,32 @@ public class TextIO {
       /** An option to indicate if output validation is desired. Default is true. */
       private final boolean validate;
 
+      /**
+       * The {@link WritableByteChannelFactory} to be used by the {@link FileBasedSink}. Default is
+       * {@link FileBasedSink.CompressionType#UNCOMPRESSED}.
+       */
+      private final WritableByteChannelFactory writableByteChannelFactory;
+
       Bound(Coder<T> coder) {
-        this(null, null, "", coder, 0, DEFAULT_SHARD_TEMPLATE, true);
+        this(null, null, "", null, null, coder, 0, DEFAULT_SHARD_TEMPLATE, true,
+            FileBasedSink.CompressionType.UNCOMPRESSED);
       }
 
-      private Bound(String name, String filenamePrefix, String filenameSuffix, Coder<T> coder,
-          int numShards, String shardTemplate, boolean validate) {
+      private Bound(String name, ValueProvider<String> filenamePrefix, String filenameSuffix,
+          @Nullable String header, @Nullable String footer, Coder<T> coder, int numShards,
+          String shardTemplate, boolean validate,
+          WritableByteChannelFactory writableByteChannelFactory) {
         super(name);
+        this.header = header;
+        this.footer = footer;
         this.coder = coder;
         this.filenamePrefix = filenamePrefix;
         this.filenameSuffix = filenameSuffix;
         this.numShards = numShards;
         this.shardTemplate = shardTemplate;
         this.validate = validate;
-      }
-
-      /**
-       * Returns a transform for writing to text files that's like this one but
-       * with the given step name.
-       *
-       * <p>Does not modify this object.
-       */
-      public Bound<T> named(String name) {
-        return new Bound<>(name, filenamePrefix, filenameSuffix, coder, numShards,
-            shardTemplate, validate);
+        this.writableByteChannelFactory =
+            firstNonNull(writableByteChannelFactory, FileBasedSink.CompressionType.UNCOMPRESSED);
       }
 
       /**
@@ -533,8 +588,17 @@ public class TextIO {
        */
       public Bound<T> to(String filenamePrefix) {
         validateOutputComponent(filenamePrefix);
-        return new Bound<>(name, filenamePrefix, filenameSuffix, coder, numShards,
-            shardTemplate, validate);
+        return new Bound<>(name, StaticValueProvider.of(filenamePrefix), filenameSuffix,
+            header, footer, coder, numShards, shardTemplate, validate,
+            writableByteChannelFactory);
+      }
+
+      /**
+       * Like {@link #to(String)}, but with a {@link ValueProvider}.
+       */
+      public Bound<T> to(ValueProvider<String> filenamePrefix) {
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
       }
 
       /**
@@ -547,8 +611,8 @@ public class TextIO {
        */
       public Bound<T> withSuffix(String nameExtension) {
         validateOutputComponent(nameExtension);
-        return new Bound<>(name, filenamePrefix, nameExtension, coder, numShards,
-            shardTemplate, validate);
+        return new Bound<>(name, filenamePrefix, nameExtension, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
       }
 
       /**
@@ -566,9 +630,9 @@ public class TextIO {
        * @see ShardNameTemplate
        */
       public Bound<T> withNumShards(int numShards) {
-        Preconditions.checkArgument(numShards >= 0);
-        return new Bound<>(name, filenamePrefix, filenameSuffix, coder, numShards,
-            shardTemplate, validate);
+        checkArgument(numShards >= 0);
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
       }
 
       /**
@@ -580,8 +644,8 @@ public class TextIO {
        * @see ShardNameTemplate
        */
       public Bound<T> withShardNameTemplate(String shardTemplate) {
-        return new Bound<>(name, filenamePrefix, filenameSuffix, coder, numShards,
-            shardTemplate, validate);
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
       }
 
       /**
@@ -598,20 +662,21 @@ public class TextIO {
        * <p>Does not modify this object.
        */
       public Bound<T> withoutSharding() {
-        return new Bound<>(name, filenamePrefix, filenameSuffix, coder, 1, "", validate);
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, 1, "",
+            validate, writableByteChannelFactory);
       }
 
       /**
        * Returns a transform for writing to text files that's like this one
-       * but that uses the given {@link Coder Coder<X>} to encode each of
-       * the elements of the input {@link PCollection PCollection<X>} into an
+       * but that uses the given {@link Coder Coder&lt;X&gt;} to encode each of
+       * the elements of the input {@link PCollection PCollection&lt;X&gt;} into an
        * output text line. Does not modify this object.
        *
        * @param <X> the type of the elements of the input {@link PCollection}
        */
       public <X> Bound<X> withCoder(Coder<X> coder) {
-        return new Bound<>(name, filenamePrefix, filenameSuffix, coder, numShards,
-            shardTemplate, validate);
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
       }
 
       /**
@@ -625,37 +690,98 @@ public class TextIO {
        * <p>Does not modify this object.
        */
       public Bound<T> withoutValidation() {
-        return new Bound<>(name, filenamePrefix, filenameSuffix, coder, numShards,
-            shardTemplate, false);
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, false, writableByteChannelFactory);
+      }
+
+      /**
+       * Returns a transform for writing to text files that adds a header string to the files
+       * it writes. Note that a newline character will be added after the header.
+       *
+       * <p>A {@code null} value will clear any previously configured header.
+       *
+       * <p>Does not modify this object.
+       *
+       * @param header the string to be added as file header
+       */
+      public Bound<T> withHeader(@Nullable String header) {
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
+      }
+
+      /**
+       * Returns a transform for writing to text files that adds a footer string to the files
+       * it writes. Note that a newline character will be added after the header.
+       *
+       * <p>A {@code null} value will clear any previously configured footer.
+       *
+       * <p>Does not modify this object.
+       *
+       * @param footer the string to be added as file footer
+       */
+      public Bound<T> withFooter(@Nullable String footer) {
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
+      }
+
+      /**
+       * Returns a transform for writing to text files like this one but that has the given
+       * {@link WritableByteChannelFactory} to be used by the {@link FileBasedSink} during output.
+       * The default is value is {@link FileBasedSink.CompressionType#UNCOMPRESSED}.
+       *
+       * <p>A {@code null} value will reset the value to the default value mentioned above.
+       *
+       * <p>Does not modify this object.
+       *
+       * @param writableByteChannelFactory the factory to be used during output
+       */
+      public Bound<T> withWritableByteChannelFactory(
+          WritableByteChannelFactory writableByteChannelFactory) {
+        return new Bound<>(name, filenamePrefix, filenameSuffix, header, footer, coder, numShards,
+            shardTemplate, validate, writableByteChannelFactory);
       }
 
       @Override
-      public PDone apply(PCollection<T> input) {
+      public PDone expand(PCollection<T> input) {
         if (filenamePrefix == null) {
           throw new IllegalStateException(
               "need to set the filename prefix of a TextIO.Write transform");
         }
-
-        // Note that custom sinks currently do not expose sharding controls.
-        // Thus pipeline runner writers need to individually add support internally to
-        // apply user requested sharding limits.
-        return input.apply("Write", org.apache.beam.sdk.io.Write.to(
-            new TextSink<>(
-                filenamePrefix, filenameSuffix, shardTemplate, coder)));
+        org.apache.beam.sdk.io.Write.Bound<T> write =
+            org.apache.beam.sdk.io.Write.to(
+                new TextSink<>(filenamePrefix, filenameSuffix, header, footer, shardTemplate,
+                    coder, writableByteChannelFactory));
+        if (getNumShards() > 0) {
+          write = write.withNumShards(getNumShards());
+        }
+        return input.apply("Write", write);
       }
 
       @Override
       public void populateDisplayData(DisplayData.Builder builder) {
         super.populateDisplayData(builder);
 
+        String prefixString = filenamePrefix.isAccessible()
+            ? filenamePrefix.get() : filenamePrefix.toString();
         builder
-            .addIfNotNull(DisplayData.item("filePrefix", filenamePrefix))
-            .addIfNotDefault(DisplayData.item("fileSuffix", filenameSuffix), "")
-            .addIfNotDefault(
-                DisplayData.item("shardNameTemplate", shardTemplate),
+            .addIfNotNull(DisplayData.item("filePrefix", prefixString)
+              .withLabel("Output File Prefix"))
+            .addIfNotDefault(DisplayData.item("fileSuffix", filenameSuffix)
+              .withLabel("Output Fix Suffix"), "")
+            .addIfNotDefault(DisplayData.item("shardNameTemplate", shardTemplate)
+              .withLabel("Output Shard Name Template"),
                 DEFAULT_SHARD_TEMPLATE)
-            .addIfNotDefault(DisplayData.item("validation", validate), true)
-            .addIfNotDefault(DisplayData.item("numShards", numShards), 0);
+            .addIfNotDefault(DisplayData.item("validation", validate)
+              .withLabel("Validation Enabled"), true)
+            .addIfNotDefault(DisplayData.item("numShards", numShards)
+              .withLabel("Maximum Output Shards"), 0)
+            .addIfNotNull(DisplayData.item("fileHeader", header)
+              .withLabel("File Header"))
+            .addIfNotNull(DisplayData.item("fileFooter", footer)
+                .withLabel("File Footer"))
+            .add(DisplayData
+                .item("writableByteChannelFactory", writableByteChannelFactory.toString())
+                .withLabel("Compression/Transformation Type"));
       }
 
       /**
@@ -671,7 +797,7 @@ public class TextIO {
       }
 
       public String getFilenamePrefix() {
-        return filenamePrefix;
+        return filenamePrefix.get();
       }
 
       public String getShardTemplate() {
@@ -690,6 +816,16 @@ public class TextIO {
         return coder;
       }
 
+      @Nullable
+      public String getHeader() {
+        return header;
+      }
+
+      @Nullable
+      public String getFooter() {
+        return footer;
+      }
+
       public boolean needsValidation() {
         return validate;
       }
@@ -699,7 +835,7 @@ public class TextIO {
   /**
    * Possible text file compression types.
    */
-  public static enum CompressionType {
+  public enum CompressionType {
     /**
      * Automatically determine the compression type based on filename extension.
      */
@@ -715,11 +851,15 @@ public class TextIO {
     /**
      * BZipped.
      */
-    BZIP2(".bz2");
+    BZIP2(".bz2"),
+    /**
+     * Zipped.
+     */
+    ZIP(".zip");
 
     private String filenameSuffix;
 
-    private CompressionType(String suffix) {
+    CompressionType(String suffix) {
       this.filenameSuffix = suffix;
     }
 
@@ -738,7 +878,7 @@ public class TextIO {
   private static final Pattern SHARD_OUTPUT_PATTERN = Pattern.compile("@([0-9]+|\\*)");
 
   private static void validateOutputComponent(String partialFilePattern) {
-    Preconditions.checkArgument(
+    checkArgument(
         !SHARD_OUTPUT_PATTERN.matcher(partialFilePattern).find(),
         "Output name components are not allowed to contain @* or @N patterns: "
         + partialFilePattern);
@@ -750,7 +890,7 @@ public class TextIO {
   private TextIO() {}
 
   /**
-   * A {@link FileBasedSource} which can decode records delimited by new line characters.
+   * A {@link FileBasedSource} which can decode records delimited by newline characters.
    *
    * <p>This source splits the data into records using {@code UTF-8} {@code \n}, {@code \r}, or
    * {@code \r\n} as the delimiter. This source is not strict and supports decoding the last record
@@ -771,6 +911,12 @@ public class TextIO {
       this.coder = coder;
     }
 
+    @VisibleForTesting
+    TextSource(ValueProvider<String> fileSpec, Coder<T> coder) {
+      super(fileSpec, 1L);
+      this.coder = coder;
+    }
+
     private TextSource(String fileName, long start, long end, Coder<T> coder) {
       super(fileName, 1L, start, end);
       this.coder = coder;
@@ -787,20 +933,15 @@ public class TextIO {
     }
 
     @Override
-    public boolean producesSortedKeys(PipelineOptions options) throws Exception {
-      return false;
-    }
-
-    @Override
     public Coder<T> getDefaultOutputCoder() {
       return coder;
     }
 
     /**
      * A {@link org.apache.beam.sdk.io.FileBasedSource.FileBasedReader FileBasedReader}
-     * which can decode records delimited by new line characters.
+     * which can decode records delimited by newline characters.
      *
-     * See {@link TextSource} for further details.
+     * <p>See {@link TextSource} for further details.
      */
     @VisibleForTesting
     static class TextBasedReader<T> extends FileBasedReader<T> {
@@ -810,9 +951,10 @@ public class TextIO {
       private ByteString buffer;
       private int startOfSeparatorInBuffer;
       private int endOfSeparatorInBuffer;
-      private long startOfNextRecord;
-      private boolean eof;
-      private boolean elementIsPresent;
+      private long startOfRecord;
+      private volatile long startOfNextRecord;
+      private volatile boolean eof;
+      private volatile boolean elementIsPresent;
       private T currentValue;
       private ReadableByteChannel inChannel;
 
@@ -827,7 +969,15 @@ public class TextIO {
         if (!elementIsPresent) {
           throw new NoSuchElementException();
         }
-        return startOfNextRecord;
+        return startOfRecord;
+      }
+
+      @Override
+      public long getSplitPointsRemaining() {
+        if (isStarted() && startOfNextRecord >= getCurrentSource().getEndOffset()) {
+          return isDone() ? 0 : 1;
+        }
+        return super.getSplitPointsRemaining();
       }
 
       @Override
@@ -905,7 +1055,7 @@ public class TextIO {
 
       @Override
       protected boolean readNextRecord() throws IOException {
-        startOfNextRecord += endOfSeparatorInBuffer;
+        startOfRecord = startOfNextRecord;
         findSeparatorBounds();
 
         // If we have reached EOF file and consumed all of the buffer then we know
@@ -916,13 +1066,14 @@ public class TextIO {
         }
 
         decodeCurrentElement();
+        startOfNextRecord = startOfRecord + endOfSeparatorInBuffer;
         return true;
       }
 
       /**
        * Decodes the current element updating the buffer to only contain the unconsumed bytes.
        *
-       * This invalidates the currently stored {@code startOfSeparatorInBuffer} and
+       * <p>This invalidates the currently stored {@code startOfSeparatorInBuffer} and
        * {@code endOfSeparatorInBuffer}.
        */
       private void decodeCurrentElement() throws IOException {
@@ -951,24 +1102,31 @@ public class TextIO {
   }
 
   /**
-   * A {@link FileBasedSink} for text files. Produces text files with the new line separator
+   * A {@link FileBasedSink} for text files. Produces text files with the newline separator
    * {@code '\n'} represented in {@code UTF-8} format as the record separator.
    * Each record (including the last) is terminated.
    */
   @VisibleForTesting
   static class TextSink<T> extends FileBasedSink<T> {
     private final Coder<T> coder;
+    @Nullable private final String header;
+    @Nullable private final String footer;
 
     @VisibleForTesting
     TextSink(
-        String baseOutputFilename, String extension, String fileNameTemplate, Coder<T> coder) {
-      super(baseOutputFilename, extension, fileNameTemplate);
+        ValueProvider<String> baseOutputFilename, String extension,
+        @Nullable String header, @Nullable String footer,
+        String fileNameTemplate, Coder<T> coder,
+        WritableByteChannelFactory writableByteChannelFactory) {
+      super(baseOutputFilename, extension, fileNameTemplate, writableByteChannelFactory);
       this.coder = coder;
+      this.header = header;
+      this.footer = footer;
     }
 
     @Override
     public FileBasedSink.FileBasedWriteOperation<T> createWriteOperation(PipelineOptions options) {
-      return new TextWriteOperation<>(this, coder);
+      return new TextWriteOperation<>(this, coder, header, footer);
     }
 
     /**
@@ -977,15 +1135,20 @@ public class TextIO {
      */
     private static class TextWriteOperation<T> extends FileBasedWriteOperation<T> {
       private final Coder<T> coder;
+      @Nullable private final String header;
+      @Nullable private final String footer;
 
-      private TextWriteOperation(TextSink<T> sink, Coder<T> coder) {
+      private TextWriteOperation(TextSink<T> sink, Coder<T> coder,
+          @Nullable String header, @Nullable String footer) {
         super(sink);
         this.coder = coder;
+        this.header = header;
+        this.footer = footer;
       }
 
       @Override
       public FileBasedWriter<T> createWriter(PipelineOptions options) throws Exception {
-        return new TextWriter<>(this, coder);
+        return new TextWriter<>(this, coder, header, footer);
       }
     }
 
@@ -996,17 +1159,42 @@ public class TextIO {
     private static class TextWriter<T> extends FileBasedWriter<T> {
       private static final byte[] NEWLINE = "\n".getBytes(StandardCharsets.UTF_8);
       private final Coder<T> coder;
+      @Nullable private final String header;
+      @Nullable private final String footer;
       private OutputStream out;
 
-      public TextWriter(FileBasedWriteOperation<T> writeOperation, Coder<T> coder) {
+      public TextWriter(FileBasedWriteOperation<T> writeOperation, Coder<T> coder,
+          @Nullable String header, @Nullable String footer) {
         super(writeOperation);
+        this.header = header;
+        this.footer = footer;
         this.mimeType = MimeTypes.TEXT;
         this.coder = coder;
+      }
+
+      /**
+       * Writes {@code value} followed by a newline if {@code value} is not null.
+       */
+      private void writeIfNotNull(@Nullable String value) throws IOException {
+        if (value != null) {
+          out.write(value.getBytes(StandardCharsets.UTF_8));
+          out.write(NEWLINE);
+        }
       }
 
       @Override
       protected void prepareWrite(WritableByteChannel channel) throws Exception {
         out = Channels.newOutputStream(channel);
+      }
+
+      @Override
+      protected void writeHeader() throws Exception {
+        writeIfNotNull(header);
+      }
+
+      @Override
+      protected void writeFooter() throws Exception {
+        writeIfNotNull(footer);
       }
 
       @Override

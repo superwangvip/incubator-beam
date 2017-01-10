@@ -17,16 +17,13 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import org.apache.beam.sdk.runners.DirectPipelineRunner;
+import java.util.List;
+import java.util.Map;
 import org.apache.beam.sdk.runners.PipelineRunner;
 import org.apache.beam.sdk.util.PCollectionViews;
-import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
-
-import java.util.List;
-import java.util.Map;
 
 /**
  * Transforms for creating {@link PCollectionView PCollectionViews} from
@@ -192,9 +189,9 @@ public class View {
 
   /**
    * Returns a {@link View.AsMap} transform that takes a
-   * {@link PCollection PCollection&lt;KV&lt;K V&gt;&gt;} as
+   * {@link PCollection PCollection&lt;KV&lt;K, V&gt;&gt;} as
    * input and produces a {@link PCollectionView} mapping each window to
-   * a {@link Map Map&gt;K, V&gt;}. It is required that each key of the input be
+   * a {@link Map Map&lt;K, V&gt;}. It is required that each key of the input be
    * associated with a single value, per window. If this is not the case, precede this
    * view with {@code Combine.perKey}, as in the example below, or alternatively
    * use {@link View#asMultimap()}.
@@ -216,7 +213,7 @@ public class View {
 
   /**
    * Returns a {@link View.AsMultimap} transform that takes a
-   * {@link PCollection PCollection&lt;KV&ltK, V&gt;&gt;}
+   * {@link PCollection PCollection&lt;KV&lt;K, V&gt;&gt;}
    * as input and produces a {@link PCollectionView} mapping
    * each window to its contents as a {@link Map Map&lt;K, Iterable&lt;V&gt;&gt;}
    * for use as a side input.
@@ -254,7 +251,7 @@ public class View {
     }
 
     @Override
-    public PCollectionView<List<T>> apply(PCollection<T> input) {
+    public PCollectionView<List<T>> expand(PCollection<T> input) {
       return input.apply(CreatePCollectionView.<T, List<T>>of(PCollectionViews.listView(
           input.getPipeline(), input.getWindowingStrategy(), input.getCoder())));
     }
@@ -280,7 +277,7 @@ public class View {
     }
 
     @Override
-    public PCollectionView<Iterable<T>> apply(PCollection<T> input) {
+    public PCollectionView<Iterable<T>> expand(PCollection<T> input) {
       return input.apply(CreatePCollectionView.<T, Iterable<T>>of(PCollectionViews.iterableView(
           input.getPipeline(), input.getWindowingStrategy(), input.getCoder())));
     }
@@ -337,7 +334,7 @@ public class View {
     }
 
     @Override
-    public PCollectionView<T> apply(PCollection<T> input) {
+    public PCollectionView<T> expand(PCollection<T> input) {
       return input.apply(CreatePCollectionView.<T, T>of(PCollectionViews.singletonView(
           input.getPipeline(),
           input.getWindowingStrategy(),
@@ -367,7 +364,7 @@ public class View {
     }
 
     @Override
-    public PCollectionView<Map<K, Iterable<V>>> apply(PCollection<KV<K, V>> input) {
+    public PCollectionView<Map<K, Iterable<V>>> expand(PCollection<KV<K, V>> input) {
       return input.apply(CreatePCollectionView.<KV<K, V>, Map<K, Iterable<V>>>of(
           PCollectionViews.multimapView(
               input.getPipeline(),
@@ -404,7 +401,7 @@ public class View {
     }
 
     @Override
-    public PCollectionView<Map<K, V>> apply(PCollection<KV<K, V>> input) {
+    public PCollectionView<Map<K, V>> expand(PCollection<KV<K, V>> input) {
       return input.apply(CreatePCollectionView.<KV<K, V>, Map<K, V>>of(
           PCollectionViews.mapView(
               input.getPipeline(),
@@ -442,30 +439,8 @@ public class View {
     }
 
     @Override
-    public PCollectionView<ViewT> apply(PCollection<ElemT> input) {
+    public PCollectionView<ViewT> expand(PCollection<ElemT> input) {
       return view;
-    }
-
-    static {
-      DirectPipelineRunner.registerDefaultTransformEvaluator(
-          CreatePCollectionView.class,
-          new DirectPipelineRunner.TransformEvaluator<CreatePCollectionView>() {
-            @SuppressWarnings("rawtypes")
-            @Override
-            public void evaluate(
-                CreatePCollectionView transform,
-                DirectPipelineRunner.EvaluationContext context) {
-              evaluateTyped(transform, context);
-            }
-
-            private <ElemT, ViewT> void evaluateTyped(
-                CreatePCollectionView<ElemT, ViewT> transform,
-                DirectPipelineRunner.EvaluationContext context) {
-              List<WindowedValue<ElemT>> elems =
-                  context.getPCollectionWindowedValues(context.getInput(transform));
-              context.setPCollectionView(context.getOutput(transform), elems);
-            }
-          });
     }
   }
 }

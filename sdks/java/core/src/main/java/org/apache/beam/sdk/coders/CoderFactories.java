@@ -17,8 +17,6 @@
  */
 package org.apache.beam.sdk.coders;
 
-import org.apache.beam.sdk.values.TypeDescriptor;
-
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -26,6 +24,7 @@ import java.lang.reflect.ParameterizedType;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * Static utility methods for creating and working with {@link Coder}s.
@@ -96,11 +95,11 @@ public final class CoderFactories {
       try {
         return (Coder) factoryMethod.invoke(
             null /* static */, componentCoders.toArray());
-      } catch (IllegalAccessException |
-               IllegalArgumentException |
-               InvocationTargetException |
-               NullPointerException |
-               ExceptionInInitializerError exn) {
+      } catch (IllegalAccessException
+           | IllegalArgumentException
+           | InvocationTargetException
+           | NullPointerException
+           | ExceptionInInitializerError exn) {
         throw new IllegalStateException(
             "error when invoking Coder factory method " + factoryMethod,
             exn);

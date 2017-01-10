@@ -17,6 +17,17 @@
  */
 package org.apache.beam.sdk.transforms;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
+import com.google.common.collect.Lists;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.PriorityQueue;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.CoderException;
 import org.apache.beam.sdk.coders.CoderRegistry;
@@ -28,21 +39,11 @@ import org.apache.beam.sdk.transforms.Combine.PerKey;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
+import org.apache.beam.sdk.util.NameUtils;
+import org.apache.beam.sdk.util.NameUtils.NameOverride;
 import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.PriorityQueue;
 
 /**
  * {@code PTransform}s for finding the largest (or smallest) set
@@ -98,7 +99,7 @@ public class Top {
    */
   public static <T, ComparatorT extends Comparator<T> & Serializable>
       Combine.Globally<T, List<T>> of(int count, ComparatorT compareFn) {
-    return Combine.globally(new TopCombineFn<>(count, compareFn)).named("Top.Globally");
+    return Combine.globally(new TopCombineFn<>(count, compareFn));
   }
 
   /**
@@ -142,8 +143,7 @@ public class Top {
    * {@code KV}s and return the top values associated with each key.
    */
   public static <T extends Comparable<T>> Combine.Globally<T, List<T>> smallest(int count) {
-    return Combine.globally(new TopCombineFn<>(count, new Smallest<T>()))
-        .named("Smallest.Globally");
+    return Combine.globally(new TopCombineFn<>(count, new Smallest<T>()));
   }
 
   /**
@@ -187,7 +187,7 @@ public class Top {
    * {@code KV}s and return the top values associated with each key.
    */
   public static <T extends Comparable<T>> Combine.Globally<T, List<T>> largest(int count) {
-    return Combine.globally(new TopCombineFn<>(count, new Largest<T>())).named("Largest.Globally");
+    return Combine.globally(new TopCombineFn<>(count, new Largest<T>()));
   }
 
   /**
@@ -234,8 +234,7 @@ public class Top {
   public static <K, V, ComparatorT extends Comparator<V> & Serializable>
       PTransform<PCollection<KV<K, V>>, PCollection<KV<K, List<V>>>>
       perKey(int count, ComparatorT compareFn) {
-    return Combine.perKey(
-        new TopCombineFn<>(count, compareFn).<K>asKeyedFn()).named("Top.PerKey");
+    return Combine.perKey(new TopCombineFn<>(count, compareFn).<K>asKeyedFn());
   }
 
   /**
@@ -281,8 +280,7 @@ public class Top {
   public static <K, V extends Comparable<V>>
       PTransform<PCollection<KV<K, V>>, PCollection<KV<K, List<V>>>>
       smallestPerKey(int count) {
-    return Combine.perKey(new TopCombineFn<>(count, new Smallest<V>()).<K>asKeyedFn())
-        .named("Smallest.PerKey");
+    return Combine.perKey(new TopCombineFn<>(count, new Smallest<V>()).<K>asKeyedFn());
   }
 
   /**
@@ -328,9 +326,7 @@ public class Top {
   public static <K, V extends Comparable<V>>
       PerKey<K, V, List<V>>
       largestPerKey(int count) {
-    return Combine.perKey(
-new TopCombineFn<>(count, new Largest<V>()).<K>asKeyedFn())
-        .named("Largest.PerKey");
+    return Combine.perKey(new TopCombineFn<>(count, new Largest<V>()).<K>asKeyedFn());
   }
 
   /**
@@ -369,17 +365,21 @@ new TopCombineFn<>(count, new Largest<V>()).<K>asKeyedFn())
    * @param <T> type of element being compared
    */
   public static class TopCombineFn<T, ComparatorT extends Comparator<T> & Serializable>
-      extends AccumulatingCombineFn<T, BoundedHeap<T, ComparatorT>, List<T>> {
+      extends AccumulatingCombineFn<T, BoundedHeap<T, ComparatorT>, List<T>>
+      implements NameOverride {
 
     private final int count;
     private final ComparatorT compareFn;
 
     public TopCombineFn(int count, ComparatorT compareFn) {
-      Preconditions.checkArgument(
-          count >= 0,
-          "count must be >= 0");
+      checkArgument(count >= 0, "count must be >= 0 (not %s)", count);
       this.count = count;
       this.compareFn = compareFn;
+    }
+
+    @Override
+    public String getNameOverride() {
+      return String.format("Top(%s)", NameUtils.approximateSimpleName(compareFn));
     }
 
     @Override
@@ -397,8 +397,10 @@ new TopCombineFn<>(count, new Largest<V>()).<K>asKeyedFn())
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
       builder
-          .add(DisplayData.item("count", count))
-          .add(DisplayData.item("comparer", compareFn.getClass()));
+          .add(DisplayData.item("count", count)
+            .withLabel("Top Count"))
+          .add(DisplayData.item("comparer", compareFn.getClass())
+            .withLabel("Record Comparer"));
     }
 
     @Override

@@ -17,9 +17,13 @@
  */
 package org.apache.beam.examples.complete;
 
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
 import org.apache.beam.examples.complete.AutoComplete.CompletionCandidate;
 import org.apache.beam.examples.complete.AutoComplete.ComputeTopCompletions;
-import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
@@ -33,18 +37,12 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TimestampedValue;
-
 import org.joda.time.Duration;
 import org.joda.time.Instant;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
-
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
 
 /**
  * Tests of AutoComplete.
@@ -52,6 +50,9 @@ import java.util.List;
 @RunWith(Parameterized.class)
 public class AutoCompleteTest implements Serializable {
   private boolean recursive;
+
+  @Rule
+  public transient TestPipeline p = TestPipeline.create();
 
   public AutoCompleteTest(Boolean recursive) {
     this.recursive = recursive;
@@ -79,19 +80,17 @@ public class AutoCompleteTest implements Serializable {
         "blueberry",
         "cherry");
 
-    Pipeline p = TestPipeline.create();
-
     PCollection<String> input = p.apply(Create.of(words));
 
     PCollection<KV<String, List<CompletionCandidate>>> output =
       input.apply(new ComputeTopCompletions(2, recursive))
-           .apply(Filter.byPredicate(
-                        new SerializableFunction<KV<String, List<CompletionCandidate>>, Boolean>() {
-                          @Override
-                          public Boolean apply(KV<String, List<CompletionCandidate>> element) {
-                            return element.getKey().length() <= 2;
-                          }
-                      }));
+           .apply(Filter.by(
+               new SerializableFunction<KV<String, List<CompletionCandidate>>, Boolean>() {
+                 @Override
+                 public Boolean apply(KV<String, List<CompletionCandidate>> element) {
+                   return element.getKey().length() <= 2;
+                 }
+               }));
 
     PAssert.that(output).containsInAnyOrder(
         KV.of("a", parseList("apple:2", "apricot:1")),
@@ -101,14 +100,12 @@ public class AutoCompleteTest implements Serializable {
         KV.of("bl", parseList("blackberry:3", "blueberry:2")),
         KV.of("c", parseList("cherry:1")),
         KV.of("ch", parseList("cherry:1")));
-    p.run();
+    p.run().waitUntilFinish();
   }
 
   @Test
   public void testTinyAutoComplete() {
     List<String> words = Arrays.asList("x", "x", "x", "xy", "xy", "xyz");
-
-    Pipeline p = TestPipeline.create();
 
     PCollection<String> input = p.apply(Create.of(words));
 
@@ -119,7 +116,7 @@ public class AutoCompleteTest implements Serializable {
         KV.of("x", parseList("x:3", "xy:2")),
         KV.of("xy", parseList("xy:2", "xyz:1")),
         KV.of("xyz", parseList("xyz:1")));
-    p.run();
+    p.run().waitUntilFinish();
   }
 
   @Test
@@ -130,8 +127,6 @@ public class AutoCompleteTest implements Serializable {
         TimestampedValue.of("xB", new Instant(1)),
         TimestampedValue.of("xB", new Instant(2)),
         TimestampedValue.of("xB", new Instant(2)));
-
-    Pipeline p = TestPipeline.create();
 
     PCollection<String> input = p
       .apply(Create.of(words))
@@ -155,7 +150,7 @@ public class AutoCompleteTest implements Serializable {
         // Window [2, 3)
         KV.of("x", parseList("xB:2")),
         KV.of("xB", parseList("xB:2")));
-    p.run();
+    p.run().waitUntilFinish();
   }
 
   private static List<CompletionCandidate> parseList(String... entries) {
@@ -170,9 +165,9 @@ public class AutoCompleteTest implements Serializable {
   private static class ReifyTimestamps<T>
       extends PTransform<PCollection<TimestampedValue<T>>, PCollection<T>> {
     @Override
-    public PCollection<T> apply(PCollection<TimestampedValue<T>> input) {
+    public PCollection<T> expand(PCollection<TimestampedValue<T>> input) {
       return input.apply(ParDo.of(new DoFn<TimestampedValue<T>, T>() {
-        @Override
+        @ProcessElement
         public void processElement(ProcessContext c) {
           c.outputWithTimestamp(c.element().getValue(), c.element().getTimestamp());
         }

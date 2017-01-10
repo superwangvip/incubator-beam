@@ -17,7 +17,7 @@
  */
 package org.apache.beam.runners.direct;
 
-import org.apache.beam.runners.direct.InProcessPipelineRunner.CommittedBundle;
+import org.apache.beam.runners.direct.DirectRunner.CommittedBundle;
 import org.apache.beam.sdk.util.WindowedValue;
 
 /**
@@ -37,10 +37,10 @@ public interface TransformEvaluator<InputT> {
   /**
    * Finish processing the bundle of this {@link TransformEvaluator}.
    *
-   * After {@link #finishBundle()} is called, the {@link TransformEvaluator} will not be reused,
+   * <p>After {@link #finishBundle()} is called, the {@link TransformEvaluator} will not be reused,
    * and no more elements will be processed.
    *
-   * @return an {@link InProcessTransformResult} containing the results of this bundle evaluation.
+   * @return an {@link TransformResult} containing the results of this bundle evaluation.
    */
-  InProcessTransformResult finishBundle() throws Exception;
+  TransformResult<InputT> finishBundle() throws Exception;
 }

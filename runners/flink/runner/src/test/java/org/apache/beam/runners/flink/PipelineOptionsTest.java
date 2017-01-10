@@ -17,22 +17,45 @@
  */
 package org.apache.beam.runners.flink;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import java.util.Collections;
+import java.util.HashMap;
 import org.apache.beam.runners.flink.translation.utils.SerializedPipelineOptions;
+import org.apache.beam.runners.flink.translation.wrappers.streaming.DoFnOperator;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
+import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
+import org.apache.beam.sdk.transforms.windowing.PaneInfo;
+import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.sdk.util.WindowingStrategy;
+import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.sdk.values.TupleTag;
+import org.apache.commons.lang.SerializationUtils;
+import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
+import org.joda.time.Instant;
+import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-
 /**
- * Tests the serialization and deserialization of PipelineOptions.
+ * Tests for serialization and deserialization of {@link PipelineOptions} in {@link DoFnOperator}.
  */
 public class PipelineOptionsTest {
 
-  private interface MyOptions extends FlinkPipelineOptions {
+  /**
+   * Pipeline options.
+   */
+  public interface MyOptions extends FlinkPipelineOptions {
     @Description("Bla bla bla")
     @Default.String("Hello")
     String getTestOption();
@@ -42,7 +65,7 @@ public class PipelineOptionsTest {
   private static MyOptions options;
   private static SerializedPipelineOptions serializedOptions;
 
-  private final static String[] args = new String[]{"--testOption=nothing"};
+  private static final String[] args = new String[]{"--testOption=nothing"};
 
   @BeforeClass
   public static void beforeTest() {
@@ -58,11 +81,84 @@ public class PipelineOptionsTest {
 
   @Test
   public void testCaching() {
-    MyOptions deserializedOptions = serializedOptions.getPipelineOptions().as(MyOptions.class);
+    PipelineOptions deserializedOptions =
+        serializedOptions.getPipelineOptions().as(PipelineOptions.class);
+
     assertNotNull(deserializedOptions);
-    assertEquals(deserializedOptions, serializedOptions.getPipelineOptions());
-    assertEquals(deserializedOptions, serializedOptions.getPipelineOptions());
-    assertEquals(deserializedOptions, serializedOptions.getPipelineOptions());
+    assertTrue(deserializedOptions == serializedOptions.getPipelineOptions());
+    assertTrue(deserializedOptions == serializedOptions.getPipelineOptions());
+    assertTrue(deserializedOptions == serializedOptions.getPipelineOptions());
   }
 
+  @Test(expected = Exception.class)
+  public void testNonNull() {
+    new SerializedPipelineOptions(null);
+  }
+
+  @Test(expected = Exception.class)
+  public void parDoBaseClassPipelineOptionsNullTest() {
+    DoFnOperator<Object, Object, Object> doFnOperator = new DoFnOperator<>(
+        new TestDoFn(),
+        TypeInformation.of(new TypeHint<WindowedValue<Object>>() {}),
+        new TupleTag<>("main-output"),
+        Collections.<TupleTag<?>>emptyList(),
+        new DoFnOperator.DefaultOutputManagerFactory<>(),
+        WindowingStrategy.globalDefault(),
+        new HashMap<Integer, PCollectionView<?>>(),
+        Collections.<PCollectionView<?>>emptyList(),
+        null);
+
+  }
+
+  /**
+   * Tests that PipelineOptions are present after serialization.
+   */
+  @Test
+  public void parDoBaseClassPipelineOptionsSerializationTest() throws Exception {
+
+    DoFnOperator<Object, Object, Object> doFnOperator = new DoFnOperator<>(
+        new TestDoFn(),
+        TypeInformation.of(new TypeHint<WindowedValue<Object>>() {}),
+        new TupleTag<>("main-output"),
+        Collections.<TupleTag<?>>emptyList(),
+        new DoFnOperator.DefaultOutputManagerFactory<>(),
+        WindowingStrategy.globalDefault(),
+        new HashMap<Integer, PCollectionView<?>>(),
+        Collections.<PCollectionView<?>>emptyList(),
+        options);
+
+    final byte[] serialized = SerializationUtils.serialize(doFnOperator);
+
+    @SuppressWarnings("unchecked")
+    DoFnOperator<Object, Object, Object> deserialized =
+        (DoFnOperator<Object, Object, Object>) SerializationUtils.deserialize(serialized);
+
+    OneInputStreamOperatorTestHarness<WindowedValue<Object>, Object> testHarness =
+        new OneInputStreamOperatorTestHarness<>(deserialized, new ExecutionConfig());
+
+    testHarness.open();
+
+    // execute once to access options
+    testHarness.processElement(new StreamRecord<>(
+        WindowedValue.of(
+            new Object(),
+            Instant.now(),
+            GlobalWindow.INSTANCE,
+            PaneInfo.NO_FIRING)));
+
+    testHarness.close();
+
+  }
+
+
+  private static class TestDoFn extends DoFn<Object, Object> {
+
+    @ProcessElement
+    public void processElement(ProcessContext c) throws Exception {
+      Assert.assertNotNull(c.getPipelineOptions());
+      Assert.assertEquals(
+          options.getTestOption(),
+          c.getPipelineOptions().as(MyOptions.class).getTestOption());
+    }
+  }
 }

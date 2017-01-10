@@ -17,19 +17,18 @@
  */
 package org.apache.beam.sdk.transforms;
 
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.transforms.display.DisplayData.Builder;
 import org.apache.beam.sdk.transforms.display.HasDisplayData;
-import org.apache.beam.sdk.util.StringUtils;
+import org.apache.beam.sdk.util.NameUtils;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.beam.sdk.values.TypedPValue;
-
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.Serializable;
 
 /**
  * A {@code PTransform<InputT, OutputT>} is an operation that takes an
@@ -85,13 +84,12 @@ import java.io.Serializable;
  * <p>PTransform operations have unique names, which are used by the
  * system when explaining what's going on during optimization and
  * execution.  Each PTransform gets a system-provided default name,
- * but it's a good practice to specify an explicit name, where
- * possible, using the {@code named()} method offered by some
- * PTransforms such as {@link ParDo}.  For example:
+ * but it's a good practice to specify a more informative explicit
+ * name when applying the transform. For example:
  *
  * <pre> {@code
  * ...
- * .apply(ParDo.named("Step1").of(new MyDoFn3()))
+ * .apply("Step1", ParDo.of(new MyDoFn3()))
  * ...
  * } </pre>
  *
@@ -126,11 +124,11 @@ import java.io.Serializable;
  * before the enclosing Pipeline is run.
  *
  * <p>A small number of PTransforms are implemented natively by the
- * Google Cloud Dataflow SDK; such PTransforms simply return an
+ * Apache Beam SDK; such PTransforms simply return an
  * output value as their apply implementation.
  * The majority of PTransforms are
  * implemented as composites of other PTransforms.  Such a PTransform
- * subclass typically just implements {@link #apply}, computing its
+ * subclass typically just implements {@link #expand}, computing its
  * Output value from its {@code InputT} value.  User programs are encouraged to
  * use this mechanism to modularize their own code.  Such composite
  * abstractions get their own name, and navigating through the
@@ -147,7 +145,7 @@ import java.io.Serializable;
  * implementing {@code Serializable}.
  *
  * <p>{@code PTransform} is marked {@code Serializable} solely
- * because it is common for an anonymous {@code DoFn},
+ * because it is common for an anonymous {@link DoFn},
  * instance to be created within an
  * {@code apply()} method of a composite {@code PTransform}.
  *
@@ -181,18 +179,8 @@ public abstract class PTransform<InputT extends PInput, OutputT extends POutput>
    * transforms, which do not apply any transforms internally, should return
    * a new unbound output and register evaluators (via backend-specific
    * registration methods).
-   *
-   * <p>The default implementation throws an exception.  A derived class must
-   * either implement apply, or else each runner must supply a custom
-   * implementation via
-   * {@link org.apache.beam.sdk.runners.PipelineRunner#apply}.
    */
-  public OutputT apply(InputT input) {
-    throw new IllegalArgumentException(
-        "Runner " + input.getPipeline().getRunner()
-            + " has not registered an implementation for the required primitive operation "
-            + this);
-  }
+  public abstract OutputT expand(InputT input);
 
   /**
    * Called before invoking apply (which may be intercepted by the runner) to
@@ -201,7 +189,7 @@ public abstract class PTransform<InputT extends PInput, OutputT extends POutput>
    *
    * <p>By default, does nothing.
    */
-  public void validate(InputT input) { }
+  public void validate(InputT input) {}
 
   /**
    * Returns the transform name.
@@ -218,9 +206,8 @@ public abstract class PTransform<InputT extends PInput, OutputT extends POutput>
   // understand why all of its instance state is transient.
 
   /**
-   * The base name of this {@code PTransform}, e.g., from
-   * {@link ParDo#named(String)}, or from defaults, or {@code null} if not
-   * yet assigned.
+   * The base name of this {@code PTransform}, e.g., from defaults, or
+   * {@code null} if not yet assigned.
    */
   protected final transient String name;
 
@@ -255,7 +242,7 @@ public abstract class PTransform<InputT extends PInput, OutputT extends POutput>
     if (getClass().isAnonymousClass()) {
       return "AnonymousTransform";
     } else {
-      return StringUtils.approximatePTransformName(getClass());
+      return NameUtils.approximatePTransformName(getClass());
     }
   }
 
@@ -280,17 +267,16 @@ public abstract class PTransform<InputT extends PInput, OutputT extends POutput>
    * @throws CannotProvideCoderException if no coder can be inferred
    */
   protected Coder<?> getDefaultOutputCoder() throws CannotProvideCoderException {
-    throw new CannotProvideCoderException(
-      "PTransform.getDefaultOutputCoder called.");
+    throw new CannotProvideCoderException("PTransform.getDefaultOutputCoder called.");
   }
 
   /**
    * Returns the default {@code Coder} to use for the output of this
    * single-output {@code PTransform} when applied to the given input.
    *
-   * @throws CannotProvideCoderException if none can be inferred.
-   *
    * <p>By default, always throws.
+   *
+   * @throws CannotProvideCoderException if none can be inferred.
    */
   protected Coder<?> getDefaultOutputCoder(@SuppressWarnings("unused") InputT input)
       throws CannotProvideCoderException {
@@ -301,9 +287,9 @@ public abstract class PTransform<InputT extends PInput, OutputT extends POutput>
    * Returns the default {@code Coder} to use for the given output of
    * this single-output {@code PTransform} when applied to the given input.
    *
-   * @throws CannotProvideCoderException if none can be inferred.
-   *
    * <p>By default, always throws.
+   *
+   * @throws CannotProvideCoderException if none can be inferred.
    */
   public <T> Coder<T> getDefaultOutputCoder(
       InputT input, @SuppressWarnings("unused") TypedPValue<T> output)
@@ -320,6 +306,5 @@ public abstract class PTransform<InputT extends PInput, OutputT extends POutput>
    * to provide their own display data.
    */
   @Override
-  public void populateDisplayData(Builder builder) {
-  }
+  public void populateDisplayData(Builder builder) {}
 }

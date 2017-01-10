@@ -18,11 +18,16 @@
 package org.apache.beam.sdk.transforms;
 
 import static org.apache.beam.sdk.TestUtils.checkCombineFn;
-
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 
 import com.google.common.collect.Lists;
-
+import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
+import org.apache.beam.sdk.coders.BigEndianLongCoder;
+import org.apache.beam.sdk.coders.CoderRegistry;
+import org.apache.beam.sdk.coders.DoubleCoder;
+import org.apache.beam.sdk.coders.VarIntCoder;
+import org.apache.beam.sdk.coders.VarLongCoder;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -32,21 +37,22 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class SumTest {
+  private static final CoderRegistry STANDARD_REGISTRY = new CoderRegistry();
 
   @Test
   public void testSumGetNames() {
-    assertEquals("Sum.Globally", Sum.integersGlobally().getName());
-    assertEquals("Sum.Globally", Sum.doublesGlobally().getName());
-    assertEquals("Sum.Globally", Sum.longsGlobally().getName());
-    assertEquals("Sum.PerKey", Sum.integersPerKey().getName());
-    assertEquals("Sum.PerKey", Sum.doublesPerKey().getName());
-    assertEquals("Sum.PerKey", Sum.longsPerKey().getName());
+    assertEquals("Combine.globally(SumInteger)", Sum.integersGlobally().getName());
+    assertEquals("Combine.globally(SumDouble)", Sum.doublesGlobally().getName());
+    assertEquals("Combine.globally(SumLong)", Sum.longsGlobally().getName());
+    assertEquals("Combine.perKey(SumInteger)", Sum.integersPerKey().getName());
+    assertEquals("Combine.perKey(SumDouble)", Sum.doublesPerKey().getName());
+    assertEquals("Combine.perKey(SumLong)", Sum.longsPerKey().getName());
   }
 
   @Test
   public void testSumIntegerFn() {
     checkCombineFn(
-        new Sum.SumIntegerFn(),
+        Sum.ofIntegers(),
         Lists.newArrayList(1, 2, 3, 4),
         10);
   }
@@ -54,7 +60,7 @@ public class SumTest {
   @Test
   public void testSumLongFn() {
     checkCombineFn(
-        new Sum.SumLongFn(),
+        Sum.ofLongs(),
         Lists.newArrayList(1L, 2L, 3L, 4L),
         10L);
   }
@@ -62,8 +68,32 @@ public class SumTest {
   @Test
   public void testSumDoubleFn() {
     checkCombineFn(
-        new Sum.SumDoubleFn(),
+        Sum.ofDoubles(),
         Lists.newArrayList(1.0, 2.0, 3.0, 4.0),
         10.0);
+  }
+
+  @Test
+  public void testGetAccumulatorCoderEquals() {
+    Combine.BinaryCombineIntegerFn sumIntegerFn = Sum.ofIntegers();
+    assertEquals(
+        sumIntegerFn.getAccumulatorCoder(STANDARD_REGISTRY, VarIntCoder.of()),
+        sumIntegerFn.getAccumulatorCoder(STANDARD_REGISTRY, VarIntCoder.of()));
+    assertNotEquals(
+        sumIntegerFn.getAccumulatorCoder(STANDARD_REGISTRY, VarIntCoder.of()),
+        sumIntegerFn.getAccumulatorCoder(STANDARD_REGISTRY, BigEndianIntegerCoder.of()));
+
+    Combine.BinaryCombineLongFn sumLongFn = Sum.ofLongs();
+    assertEquals(
+        sumLongFn.getAccumulatorCoder(STANDARD_REGISTRY, VarLongCoder.of()),
+        sumLongFn.getAccumulatorCoder(STANDARD_REGISTRY, VarLongCoder.of()));
+    assertNotEquals(
+        sumLongFn.getAccumulatorCoder(STANDARD_REGISTRY, VarLongCoder.of()),
+        sumLongFn.getAccumulatorCoder(STANDARD_REGISTRY, BigEndianLongCoder.of()));
+
+    Combine.BinaryCombineDoubleFn sumDoubleFn = Sum.ofDoubles();
+    assertEquals(
+        sumDoubleFn.getAccumulatorCoder(STANDARD_REGISTRY, DoubleCoder.of()),
+        sumDoubleFn.getAccumulatorCoder(STANDARD_REGISTRY, DoubleCoder.of()));
   }
 }

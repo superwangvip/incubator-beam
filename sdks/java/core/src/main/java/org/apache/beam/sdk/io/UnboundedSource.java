@@ -17,17 +17,14 @@
  */
 package org.apache.beam.sdk.io;
 
-import org.apache.beam.sdk.annotations.Experimental;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.options.PipelineOptions;
-
-import org.joda.time.Instant;
-
 import java.io.IOException;
 import java.util.List;
 import java.util.NoSuchElementException;
-
 import javax.annotation.Nullable;
+import org.apache.beam.sdk.annotations.Experimental;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.joda.time.Instant;
 
 /**
  * A {@link Source} that reads an unbounded amount of input and, because of that, supports
@@ -76,7 +73,7 @@ public abstract class UnboundedSource<
    * checkpoint if present.
    */
   public abstract UnboundedReader<OutputT> createReader(
-      PipelineOptions options, @Nullable CheckpointMarkT checkpointMark);
+      PipelineOptions options, @Nullable CheckpointMarkT checkpointMark) throws IOException;
 
   /**
    * Returns a {@link Coder} for encoding and decoding the checkpoints for this source, or
@@ -91,6 +88,10 @@ public abstract class UnboundedSource<
    * <p>This is needed if the underlying data source can return the same record multiple times,
    * such a queuing system with a pull-ack model.  Sources where the records read are uniquely
    * identified by the persisted state in the CheckpointMark do not need this.
+   *
+   * <p>Generally, if {@link CheckpointMark#finalizeCheckpoint()} is overridden, this method should
+   * return true. Checkpoint finalization is best-effort, and readers can be resumed from a
+   * checkpoint that has not been finalized.
    */
   public boolean requiresDeduping() {
     return false;
@@ -104,14 +105,28 @@ public abstract class UnboundedSource<
    */
   public interface CheckpointMark {
     /**
-     * Perform any finalization that needs to happen after a bundle of data read from
-     * the source has been processed and committed.
+     * Called by the system to signal that this checkpoint mark has been committed along with
+     * all the records which have been read from the {@link UnboundedReader} since the
+     * previous checkpoint was taken.
      *
-     * <p>For example, this could be sending acknowledgement requests to an external
-     * data source such as Pub/Sub.
+     * <p>For example, this method could send acknowledgements to an external data source
+     * such as Pubsub.
      *
-     * <p>This may be called from any thread, potentially at the same time as calls to the
-     * {@code UnboundedReader} that created it.
+     * <p>Note that:
+     * <ul>
+     * <li>This finalize method may be called from any thread, concurrently with calls to
+     * the {@link UnboundedReader} it was created from.
+     * <li>Checkpoints will not necessarily be finalized as soon as they are created.
+     * A checkpoint may be taken while a previous checkpoint from the same
+     * {@link UnboundedReader} has not yet be finalized.
+     * <li>In the absence of failures, all checkpoints will be finalized and they will be
+     * finalized in the same order they were taken from the {@link UnboundedReader}.
+     * <li>It is possible for a checkpoint to be taken but this method never called. This method
+     * will never be called if the checkpoint could not be committed, and other failures may cause
+     * this method to never be called.
+     * <li>It is not safe to assume the {@link UnboundedReader} from which this checkpoint was
+     * created still exists at the time this method is called.
+     * </ul>
      */
     void finalizeCheckpoint() throws IOException;
   }
@@ -126,9 +141,11 @@ public abstract class UnboundedSource<
     private static final byte[] EMPTY = new byte[0];
 
     /**
-     * Initializes the reader and advances the reader to the first record.
+     * Initializes the reader and advances the reader to the first record. If the reader has been
+     * restored from a checkpoint then it should advance to the next unread record at the point
+     * the checkpoint was taken.
      *
-     * <p>This method should be called exactly once. The invocation should occur prior to calling
+     * <p>This method will be called exactly once. The invocation will occur prior to calling
      * {@link #advance} or {@link #getCurrent}. This method may perform expensive operations that
      * are needed to initialize the reader.
      *
@@ -205,10 +222,15 @@ public abstract class UnboundedSource<
     /**
      * Returns a {@link CheckpointMark} representing the progress of this {@code UnboundedReader}.
      *
-     * <p>The elements read up until this is called will be processed together as a bundle. Once
-     * the result of this processing has been durably committed,
-     * {@link CheckpointMark#finalizeCheckpoint} will be called on the {@link CheckpointMark}
-     * object.
+     * <p>All elements read up until this method is called will be processed together as a bundle.
+     * (An element is considered 'read' if it could be returned by a call to {@link #getCurrent}.)
+     * Once the result of processing those elements and the returned checkpoint have been durably
+     * committed, {@link CheckpointMark#finalizeCheckpoint} will be called at most once at some
+     * later point on the returned {@link CheckpointMark} object. Checkpoint finalization is
+     * best-effort, and checkpoints may not be finalized. If duplicate elements may be produced if
+     * checkpoints are not finalized in a timely manner, {@link UnboundedSource#requiresDeduping()}
+     * should be overridden to return true, and {@link UnboundedReader#getCurrentRecordId()} should
+     * be overriden to return unique record IDs.
      *
      * <p>The returned object should not be modified.
      *

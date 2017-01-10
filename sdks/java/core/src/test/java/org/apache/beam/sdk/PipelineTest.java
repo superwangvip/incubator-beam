@@ -24,21 +24,23 @@ import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
+import com.google.common.collect.ImmutableList;
 import org.apache.beam.sdk.Pipeline.PipelineExecutionException;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptions.CheckEnabled;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.runners.DirectPipelineRunner;
 import org.apache.beam.sdk.runners.PipelineRunner;
+import org.apache.beam.sdk.testing.CrashingRunner;
 import org.apache.beam.sdk.testing.ExpectedLogs;
+import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
-import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.Flatten;
+import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.SimpleFunction;
 import org.apache.beam.sdk.util.UserCodeException;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
@@ -46,9 +48,6 @@ import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.beam.sdk.values.TupleTag;
-
-import com.google.common.collect.ImmutableList;
-
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
@@ -63,6 +62,7 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class PipelineTest {
 
+  @Rule public final TestPipeline pipeline = TestPipeline.create();
   @Rule public ExpectedLogs logged = ExpectedLogs.none(Pipeline.class);
   @Rule public ExpectedException thrown = ExpectedException.none();
 
@@ -124,13 +124,12 @@ public class PipelineTest {
   }
 
   @Test
-  @Category(org.apache.beam.sdk.testing.RunnableOnService.class)
+  @Category(RunnableOnService.class)
   public void testMultipleApply() {
     PTransform<PCollection<? extends String>, PCollection<String>> myTransform =
         addSuffix("+");
 
-    Pipeline p = TestPipeline.create();
-    PCollection<String> input = p.apply(Create.<String>of(ImmutableList.of("a", "b")));
+    PCollection<String> input = pipeline.apply(Create.<String>of(ImmutableList.of("a", "b")));
 
     PCollection<String> left = input.apply("Left1", myTransform).apply("Left2", myTransform);
     PCollection<String> right = input.apply("Right", myTransform);
@@ -140,15 +139,15 @@ public class PipelineTest {
 
     PAssert.that(both).containsInAnyOrder("a++", "b++", "a+", "b+");
 
-    p.run();
+    pipeline.run();
   }
 
   private static PTransform<PCollection<? extends String>, PCollection<String>> addSuffix(
       final String suffix) {
-    return ParDo.of(new DoFn<String, String>() {
+    return MapElements.via(new SimpleFunction<String, String>() {
       @Override
-      public void processElement(DoFn<String, String>.ProcessContext c) {
-        c.output(c.element() + suffix);
+      public String apply(String input) {
+        return input + suffix;
       }
     });
   }
@@ -156,42 +155,43 @@ public class PipelineTest {
   @Test
   public void testToString() {
     PipelineOptions options = PipelineOptionsFactory.as(PipelineOptions.class);
-    options.setRunner(DirectPipelineRunner.class);
+    options.setRunner(CrashingRunner.class);
     Pipeline pipeline = Pipeline.create(options);
     assertEquals("Pipeline#" + pipeline.hashCode(), pipeline.toString());
   }
 
   @Test
   public void testStableUniqueNameOff() {
-    Pipeline p = TestPipeline.create();
-    p.getOptions().setStableUniqueNames(CheckEnabled.OFF);
+    pipeline.enableAbandonedNodeEnforcement(false);
 
-    p.apply(Create.of(5, 6, 7));
-    p.apply(Create.of(5, 6, 7));
+    pipeline.getOptions().setStableUniqueNames(CheckEnabled.OFF);
+
+    pipeline.apply(Create.of(5, 6, 7));
+    pipeline.apply(Create.of(5, 6, 7));
 
     logged.verifyNotLogged("does not have a stable unique name.");
   }
 
   @Test
   public void testStableUniqueNameWarning() {
-    Pipeline p = TestPipeline.create();
-    p.getOptions().setStableUniqueNames(CheckEnabled.WARNING);
+    pipeline.enableAbandonedNodeEnforcement(false);
 
-    p.apply(Create.of(5, 6, 7));
-    p.apply(Create.of(5, 6, 7));
+    pipeline.getOptions().setStableUniqueNames(CheckEnabled.WARNING);
+
+    pipeline.apply(Create.of(5, 6, 7));
+    pipeline.apply(Create.of(5, 6, 7));
 
     logged.verifyWarn("does not have a stable unique name.");
   }
 
   @Test
   public void testStableUniqueNameError() {
-    Pipeline p = TestPipeline.create();
-    p.getOptions().setStableUniqueNames(CheckEnabled.ERROR);
+    pipeline.getOptions().setStableUniqueNames(CheckEnabled.ERROR);
 
-    p.apply(Create.of(5, 6, 7));
+    pipeline.apply(Create.of(5, 6, 7));
 
     thrown.expectMessage("does not have a stable unique name.");
-    p.apply(Create.of(5, 6, 7));
+    pipeline.apply(Create.of(5, 6, 7));
   }
 
   /**
@@ -200,7 +200,6 @@ public class PipelineTest {
   @Test
   @Category(RunnableOnService.class)
   public void testIdentityTransform() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
 
     PCollection<Integer> output = pipeline
         .apply(Create.<Integer>of(1, 2, 3, 4))
@@ -213,7 +212,7 @@ public class PipelineTest {
   private static class IdentityTransform<T extends PInput & POutput>
       extends PTransform<T, T> {
     @Override
-    public T apply(T input) {
+    public T expand(T input) {
       return input;
     }
   }
@@ -224,8 +223,6 @@ public class PipelineTest {
   @Test
   @Category(RunnableOnService.class)
   public void testTupleProjectionTransform() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
     PCollection<Integer> input = pipeline
         .apply(Create.<Integer>of(1, 2, 3, 4));
 
@@ -248,7 +245,7 @@ public class PipelineTest {
     }
 
     @Override
-    public PCollection<T> apply(PCollectionTuple input) {
+    public PCollection<T> expand(PCollectionTuple input) {
       return input.get(tag);
     }
   }
@@ -259,8 +256,6 @@ public class PipelineTest {
   @Test
   @Category(RunnableOnService.class)
   public void testTupleInjectionTransform() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
     PCollection<Integer> input = pipeline
         .apply(Create.<Integer>of(1, 2, 3, 4));
 
@@ -282,7 +277,7 @@ public class PipelineTest {
     }
 
     @Override
-    public PCollectionTuple apply(PCollection<T> input) {
+    public PCollectionTuple expand(PCollection<T> input) {
       return PCollectionTuple.of(tag, input);
     }
   }
@@ -291,8 +286,8 @@ public class PipelineTest {
    * Tests that an empty pipeline runs.
    */
   @Test
+  @Category(NeedsRunner.class)
   public void testEmptyPipeline() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
     pipeline.run();
   }
 }

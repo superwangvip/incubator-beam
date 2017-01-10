@@ -17,13 +17,11 @@
  */
 package org.apache.beam.sdk.transforms.windowing;
 
+import java.util.Objects;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.transforms.display.DisplayData;
-
 import org.joda.time.Duration;
 import org.joda.time.Instant;
-
-import java.util.Objects;
 
 /**
  * A {@link WindowFn} that windows values into fixed-size timestamp-based windows.
@@ -87,8 +85,10 @@ public class FixedWindows extends PartitioningWindowFn<Object, IntervalWindow> {
   public void populateDisplayData(DisplayData.Builder builder) {
     super.populateDisplayData(builder);
     builder
-        .add(DisplayData.item("size", size))
-        .addIfNotDefault(DisplayData.item("offset", offset), Duration.ZERO);
+        .add(DisplayData.item("size", size)
+          .withLabel("Window Duration"))
+        .addIfNotDefault(DisplayData.item("offset", offset)
+          .withLabel("Window Start Offset"), Duration.ZERO);
   }
 
   @Override

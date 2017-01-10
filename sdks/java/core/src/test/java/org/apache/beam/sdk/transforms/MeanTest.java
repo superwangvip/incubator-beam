@@ -18,32 +18,29 @@
 package org.apache.beam.sdk.transforms;
 
 import static org.apache.beam.sdk.TestUtils.checkCombineFn;
-
 import static org.junit.Assert.assertEquals;
 
+import com.google.common.collect.Lists;
+import java.util.Arrays;
+import java.util.List;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.testing.CoderProperties;
 import org.apache.beam.sdk.transforms.Mean.CountSum;
 import org.apache.beam.sdk.transforms.Mean.CountSumCoder;
-
-import com.google.common.collect.Lists;
-
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Tests for Mean.
  */
 @RunWith(JUnit4.class)
 public class MeanTest {
+
   @Test
   public void testMeanGetNames() {
-    assertEquals("Mean.Globally", Mean.globally().getName());
-    assertEquals("Mean.PerKey", Mean.perKey().getName());
+    assertEquals("Combine.globally(Mean)", Mean.globally().getName());
+    assertEquals("Combine.perKey(Mean)", Mean.perKey().getName());
   }
 
   private static final Coder<CountSum<Number>> TEST_CODER = new CountSumCoder<>();
@@ -68,7 +65,7 @@ public class MeanTest {
   @Test
   public void testMeanFn() throws Exception {
     checkCombineFn(
-        new Mean.MeanFn<Integer>(),
+        Mean.<Integer>of(),
         Lists.newArrayList(1, 2, 3, 4),
         2.5);
   }

@@ -17,11 +17,9 @@
  */
 package org.apache.beam.runners.flink.translation.types;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.VoidCoder;
-
-import com.google.common.base.Preconditions;
-
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.AtomicType;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -37,8 +35,12 @@ public class CoderTypeInformation<T> extends TypeInformation<T> implements Atomi
   private final Coder<T> coder;
 
   public CoderTypeInformation(Coder<T> coder) {
-    Preconditions.checkNotNull(coder);
+    checkNotNull(coder);
     this.coder = coder;
+  }
+
+  public Coder<T> getCoder() {
+    return coder;
   }
 
   @Override
@@ -71,9 +73,6 @@ public class CoderTypeInformation<T> extends TypeInformation<T> implements Atomi
   @Override
   @SuppressWarnings("unchecked")
   public TypeSerializer<T> createSerializer(ExecutionConfig config) {
-    if (coder instanceof VoidCoder) {
-      return (TypeSerializer<T>) new VoidCoderTypeSerializer();
-    }
     return new CoderTypeSerializer<>(coder);
   }
 
@@ -84,8 +83,12 @@ public class CoderTypeInformation<T> extends TypeInformation<T> implements Atomi
 
   @Override
   public boolean equals(Object o) {
-    if (this == o) return true;
-    if (o == null || getClass() != o.getClass()) return false;
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
 
     CoderTypeInformation that = (CoderTypeInformation) o;
 
@@ -105,14 +108,13 @@ public class CoderTypeInformation<T> extends TypeInformation<T> implements Atomi
 
   @Override
   public String toString() {
-    return "CoderTypeInformation{" +
-        "coder=" + coder +
-        '}';
+    return "CoderTypeInformation{coder=" + coder + '}';
   }
 
   @Override
   public TypeComparator<T> createComparator(boolean sortOrderAscending, ExecutionConfig
       executionConfig) {
-    return new CoderComparator<>(coder);
+    throw new UnsupportedOperationException(
+        "Non-encoded values cannot be compared directly.");
   }
 }

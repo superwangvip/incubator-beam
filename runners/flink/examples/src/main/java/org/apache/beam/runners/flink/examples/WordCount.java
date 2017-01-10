@@ -18,13 +18,13 @@
 package org.apache.beam.runners.flink.examples;
 
 import org.apache.beam.runners.flink.FlinkPipelineOptions;
-import org.apache.beam.runners.flink.FlinkPipelineRunner;
+import org.apache.beam.runners.flink.FlinkRunner;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
-import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.options.Validation;
 import org.apache.beam.sdk.transforms.Aggregator;
 import org.apache.beam.sdk.transforms.Count;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -36,13 +36,19 @@ import org.apache.beam.sdk.transforms.Sum;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 
+/**
+ * Wordcount pipeline.
+ */
 public class WordCount {
 
+  /**
+   * Function to extract words.
+   */
   public static class ExtractWordsFn extends DoFn<String, String> {
     private final Aggregator<Long, Long> emptyLines =
-        createAggregator("emptyLines", new Sum.SumLongFn());
+        createAggregator("emptyLines", Sum.ofLongs());
 
-    @Override
+    @ProcessElement
     public void processElement(ProcessContext c) {
       if (c.element().trim().isEmpty()) {
         emptyLines.addValue(1L);
@@ -60,10 +66,13 @@ public class WordCount {
     }
   }
 
+  /**
+   * PTransform counting words.
+   */
   public static class CountWords extends PTransform<PCollection<String>,
                     PCollection<KV<String, Long>>> {
     @Override
-    public PCollection<KV<String, Long>> apply(PCollection<String> lines) {
+    public PCollection<KV<String, Long>> expand(PCollection<String> lines) {
 
       // Convert lines of text into individual words.
       PCollection<String> words = lines.apply(
@@ -87,16 +96,16 @@ public class WordCount {
 
   /**
    * Options supported by {@link WordCount}.
-   * <p>
-   * Inherits standard configuration options.
+   *
+   * <p>Inherits standard configuration options.
    */
   public interface Options extends PipelineOptions, FlinkPipelineOptions {
     @Description("Path of the file to read from")
-    @Default.String("gs://dataflow-samples/shakespeare/kinglear.txt")
     String getInput();
     void setInput(String value);
 
     @Description("Path of the file to write to")
+    @Validation.Required
     String getOutput();
     void setOutput(String value);
   }
@@ -105,14 +114,14 @@ public class WordCount {
 
     Options options = PipelineOptionsFactory.fromArgs(args).withValidation()
         .as(Options.class);
-    options.setRunner(FlinkPipelineRunner.class);
+    options.setRunner(FlinkRunner.class);
 
     Pipeline p = Pipeline.create(options);
 
-    p.apply(TextIO.Read.named("ReadLines").from(options.getInput()))
+    p.apply("ReadLines", TextIO.Read.from(options.getInput()))
         .apply(new CountWords())
         .apply(MapElements.via(new FormatAsTextFn()))
-        .apply(TextIO.Write.named("WriteCounts").to(options.getOutput()));
+        .apply("WriteCounts", TextIO.Write.to(options.getOutput()));
 
     p.run();
   }

@@ -19,27 +19,14 @@ package org.apache.beam.sdk.coders.protobuf;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-import org.apache.beam.sdk.coders.AtomicCoder;
-import org.apache.beam.sdk.coders.CannotProvideCoderException;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.coders.CoderException;
-import org.apache.beam.sdk.coders.CoderProvider;
-import org.apache.beam.sdk.coders.CoderRegistry;
-import org.apache.beam.sdk.util.CloudObject;
-import org.apache.beam.sdk.util.Structs;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.TypeDescriptor;
-
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.protobuf.ExtensionRegistry;
 import com.google.protobuf.Message;
 import com.google.protobuf.Parser;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -52,8 +39,17 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
-
 import javax.annotation.Nullable;
+import org.apache.beam.sdk.coders.AtomicCoder;
+import org.apache.beam.sdk.coders.CannotProvideCoderException;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.CoderException;
+import org.apache.beam.sdk.coders.CoderProvider;
+import org.apache.beam.sdk.coders.CoderRegistry;
+import org.apache.beam.sdk.util.CloudObject;
+import org.apache.beam.sdk.util.Structs;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.TypeDescriptor;
 
 /**
  * A {@link Coder} using Google Protocol Buffers binary format. {@link ProtoCoder} supports both
@@ -128,7 +124,7 @@ public class ProtoCoder<T extends Message> extends AtomicCoder<T> {
    * Returns a {@link ProtoCoder} for the given Protocol Buffers {@link Message}.
    */
   public static <T extends Message> ProtoCoder<T> of(Class<T> protoMessageClass) {
-    return new ProtoCoder<T>(protoMessageClass, ImmutableSet.<Class<?>>of());
+    return new ProtoCoder<>(protoMessageClass, ImmutableSet.<Class<?>>of());
   }
 
   /**
@@ -166,7 +162,7 @@ public class ProtoCoder<T extends Message> extends AtomicCoder<T> {
       }
     }
 
-    return new ProtoCoder<T>(
+    return new ProtoCoder<>(
         protoMessageClass,
         new ImmutableSet.Builder<Class<?>>()
             .addAll(extensionHostClasses)
@@ -341,8 +337,8 @@ public class ProtoCoder<T extends Message> extends AtomicCoder<T> {
   }
 
   @Override
-  public CloudObject asCloudObject() {
-    CloudObject result = super.asCloudObject();
+  public CloudObject initializeCloudObject() {
+    CloudObject result = CloudObject.forClass(getClass());
     Structs.addString(result, PROTO_MESSAGE_CLASS, protoMessageClass.getName());
     List<CloudObject> extensionHostClassNames = Lists.newArrayList();
     for (String className : getSortedExtensionClasses()) {
@@ -368,6 +364,8 @@ public class ProtoCoder<T extends Message> extends AtomicCoder<T> {
     return memoizedParser;
   }
 
+  static final TypeDescriptor<Message> CHECK = new TypeDescriptor<Message>() {};
+
   /**
    * The implementation of the {@link CoderProvider} for this {@link ProtoCoder} returned by
    * {@link #coderProvider()}.
@@ -376,7 +374,7 @@ public class ProtoCoder<T extends Message> extends AtomicCoder<T> {
       new CoderProvider() {
         @Override
         public <T> Coder<T> getCoder(TypeDescriptor<T> type) throws CannotProvideCoderException {
-          if (!type.isSubtypeOf(new TypeDescriptor<Message>() {})) {
+          if (!type.isSubtypeOf(CHECK)) {
             throw new CannotProvideCoderException(
                 String.format(
                     "Cannot provide %s because %s is not a subclass of %s",
